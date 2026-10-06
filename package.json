@@ -1,0 +1,15 @@
+{
+  "name": "hazardous-lies",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node server.mjs",
+    "build": "tsc",
+    "check": "tsc --noEmit",
+    "test": "node tests/smoke.mjs"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3"
+  }
+}

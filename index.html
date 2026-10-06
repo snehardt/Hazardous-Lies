@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="#302943" />
+  <title>Hazardous Lies</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <main class="game-shell" aria-label="Hazardous Lies">
+    <div class="arena-wrap">
+      <canvas id="game" width="1280" height="640" tabindex="0" aria-label="Two player golf arena. Player one uses WASD and Space; player two uses arrow keys and slash."></canvas>
+      <div class="hud" aria-label="Scoreboard">
+        <div class="player-panel coral-panel">
+          <svg class="golfer-icon" viewBox="0 0 20 22" aria-hidden="true" shape-rendering="crispEdges"><path fill="#302943" d="M4 1h11v2h2v6h-2v6h2v6H3v-6h2V9H3V3h1z"/><path fill="currentColor" d="M5 2h9v4H4v2h14V6h-3V3H5zM5 16h10v5H5z"/><path fill="#ffe1ac" d="M6 9h8v5H6z"/><path fill="#302943" d="M12 10h2v2h-2z"/><path fill="#fff6dc" d="M6 3h3v2H6zM9 16h3v2H9z"/></svg>
+          <div><span class="player-name">P1 <span>RED  </span></span><strong id="p1-score">0 POINTS</strong><strong id="p1-state">0 SHOTS</strong></div>
+        </div>
+        <div class="course-badge"><svg viewBox="0 0 16 20" aria-hidden="true" shape-rendering="crispEdges"><path fill="#302943" d="M2 1h2v17h5v2H0v-2h2z"/><path fill="#ffe080" d="M4 1h11v3h-2v3H4z"/></svg><span id="course-name">HOLE 1 / 10</span></div>
+        <div class="player-panel blue-panel">
+          <svg class="golfer-icon" viewBox="0 0 20 22" aria-hidden="true" shape-rendering="crispEdges"><path fill="#302943" d="M4 1h11v2h2v6h-2v6h2v6H3v-6h2V9H3V3h1z"/><path fill="currentColor" d="M5 2h9v4H4v2h14V6h-3V3H5zM5 16h10v5H5z"/><path fill="#ffe1ac" d="M6 9h8v5H6z"/><path fill="#302943" d="M12 10h2v2h-2z"/><path fill="#fff6dc" d="M6 3h3v2H6zM9 16h3v2H9z"/></svg>
+          <div><span class="player-name">P2 <span>BLUE</span></span><strong id="p2-score">0 POINTS</strong><strong id="p2-state">0 SHOTS</strong></div>
+        </div>
+      </div>
+      <div id="start" class="overlay">
+        <div class="menu-card">
+          <svg class="menu-emblem" viewBox="0 0 40 30" aria-hidden="true" shape-rendering="crispEdges"><path fill="#302943" d="M6 3h4v4h4v4h4v4h4v4h4v4h8v4H24v-4h-4v-4h-4v-4h-4v-4H8V7H6zM30 3h4v4h-2v4h-4v4h-4v4h-4v4h-4v4H6v-4h8v-4h4v-4h4v-4h4V7h4z"/><path fill="#ffb769" d="M8 3h2v4H8zM10 7h4v2h-4zM14 11h4v2h-4zM18 15h4v2h-4zM22 19h4v2h-4zM26 23h8v2h-8z"/><path fill="#69c8eb" d="M30 3h2v4h-2zM26 7h4v2h-4zM22 11h4v2h-4zM18 15h4v2h-4zM14 19h4v2h-4zM6 23h8v2H6z"/><path fill="#302943" d="M18 1h6v2h2v6h-2v2h-6V9h-2V3h2z"/><path fill="#fff6dc" d="M18 3h6v6h-6z"/></svg>
+          <h1>HAZARDOUS<span>LIES</span></h1>
+          <p class="menu-rule">10 ARENAS · FIRST BALL IN EARNS A POINT</p>
+          <button id="play" class="pixel-button play-button">PLAY <span aria-hidden="true">▶</span></button>
+          <div class="menu-controls"><span><b class="coral-text">P1</b> WASD + SPACE</span><span><b class="blue-text">P2</b> ARROWS + /</span></div>
+          <span class="start-prompt">SPACE OR / TO START</span>
+        </div>
+      </div>
+      <div id="win" class="overlay hidden"><div class="menu-card win-card"><span class="win-star" aria-hidden="true">★</span><h2 id="winner">CORAL WINS!</h2><p id="win-detail"></p><button id="again" class="pixel-button play-button">REMATCH <span aria-hidden="true">↻</span></button><span class="start-prompt">R REPLAYS THIS LEVEL</span></div></div>
+      <div id="help-panel" class="help-panel hidden"><strong>CONTROLS</strong><p><b class="coral-text">P1</b> A/D MOVE · W JUMP · SPACE SWING</p><p><b class="blue-text">P2</b> ←/→ MOVE · ↑ JUMP · / SWING</p><hr><p>DOUBLE JUMP TO FRONT FLIP; JUMP AGAINST WALLS.</p><p>NEAR YOUR BALL: TAP SWING TO SET.</p><p>HIT FROM YOUR POSITION, EVEN UNDER LEDGES.</p><p>RESTING BALLS CANNOT BE PUSHED.</p><p>LEFT/RIGHT: DIRECTION · UP/DOWN: ANGLE</p><p>HOLD SWING TO CHARGE. RELEASE TO HIT.</p><p>WATER / PITS: FALL FOR 1 SECOND, RESET TO START.</p><p>SAND CATCHES BALLS; SHOTS HAVE 80% POWER.</p><p>RECALL: HOLD S / DOWN WHEN NOT AIMING.</p><p>RECALL AHEAD BALLS OR RECOVER PREVIOUS PROGRESS.</p><p>0.5 SECONDS: MAGNET APPEARS. 1 SECOND: PULL.</p><p>BEST MARKER SURVIVES WATER AND BACKWARD HITS.</p><p>PASSES THROUGH WALLS AND BONKS BOTH GOLFERS!</p><p>R REPLAYS THE LEVEL. POINTS STAY.</p><span>H TO CLOSE</span></div>
+    </div>
+    <div class="course-controls"><label for="level-select">ARENA</label><select id="level-select" aria-label="Choose arena"></select><button id="new-match" class="pixel-button">NEW MATCH</button><p id="level-idea"></p><p id="results" aria-label="Results for all ten holes"></p></div><div class="game-toolbar"><span class="tiny-title">HAZARDOUS <b>LIES</b></span><span id="hint" role="status"></span><div class="tools"><button id="help" class="pixel-button icon-button" aria-label="Show controls (H)" aria-expanded="false" aria-controls="help-panel">?</button><button id="sound" class="pixel-button icon-button" aria-label="Turn sound on (M)" aria-pressed="false"><svg viewBox="0 0 16 16" aria-hidden="true" shape-rendering="crispEdges"><path fill="currentColor" d="M1 6h3V4h2V2h2v12H6v-2H4v-2H1zM11 4h2v2h2v4h-2v2h-2v-2h2V6h-2z"/></svg></button><button id="restart" class="pixel-button icon-button" aria-label="Restart (R)">↻</button></div></div>
+  </main>
+  <script type="module" src="dist/main.js"></script>
+</body>
+</html>
+
+
+
