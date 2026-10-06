@@ -4,6 +4,10 @@ A two-player, same-keyboard golf platformer with ten complete fixed-screen arena
 
 ## Run
 
+Play online: [Hazardous Lies](https://snehardt.github.io/Hazardous-Lies/).
+
+GitHub Pages builds and publishes the game automatically when changes are pushed to `main`. Both players share one keyboard on the computer opening the link.
+
 Requires Node.js and npm (or pnpm).
 
 ```sh
