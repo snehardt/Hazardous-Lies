@@ -3,7 +3,24 @@ const canvas = document.querySelector<HTMLCanvasElement>('#game')!;
 const ctx = canvas.getContext('2d')!;
 const $ = (id: string) => document.getElementById(id)!;
 const W = 1280, H = 640, G = 1250, STEP = 1 / 120;
-const colors = ['#f28a70', '#80c8df'];
+const palette = [
+  {name:'Red',color:'#f28a70',dark:'#a65048'}, {name:'Blue',color:'#80c8df',dark:'#3b708c'},
+  {name:'Green',color:'#88c77b',dark:'#487745'}, {name:'Yellow',color:'#f4d66a',dark:'#a88635'},
+  {name:'Purple',color:'#b89adf',dark:'#765395'}, {name:'Orange',color:'#f5ad67',dark:'#ad6c36'},
+];
+const selectedColors = [0,1];
+const colors = selectedColors.map(index=>palette[index].color);
+const playerName = (i:number) => `P${i+1} ${palette[selectedColors[i]].name.toUpperCase()}`;
+selectedColors.forEach((index,i)=>{
+  const select=$(`p${i+1}-color`) as HTMLSelectElement;
+  palette.forEach((color,index)=>select.add(new Option(color.name.toUpperCase(),String(index))));select.value=String(index);
+  const applyColor=()=>{
+    selectedColors[i]=Number(select.value);colors[i]=palette[selectedColors[i]].color;
+    select.closest<HTMLElement>('.player-panel')!.style.setProperty('--player-color',colors[i]);
+    document.querySelectorAll<HTMLElement>(`.p${i+1}-text`).forEach(el=>el.style.color=palette[selectedColors[i]].dark);
+  };
+  applyColor();select.addEventListener('change',()=>{applyColor();keys.clear();canvas.focus();if(winner>=0)showWinner();render();});
+});
 type Ball = { x: number; y: number; vx: number; vy: number; grounded: boolean; grace: number; falling: number; resting: boolean; recallClear: { x: number; y: number } | null; progress: {x:number;y:number;distance:number} | null; visited: {x:number;y:number}[]; settle: number; trail: { x: number; y: number }[] };
 type Player = { x: number; y: number; vx: number; vy: number; grounded: boolean; jumps: number; wall: number; coyote: number; facing: number; set: boolean; charging: boolean; power: number; angle: number; tumble: boolean; recovery: number; rotation: number; flip: number; flipDirection: number; anim: number; swing: number; strokes: number; falling: number; magnetHold: number; magnetActive: boolean; magnetUsed: boolean; magnetSpeed: number; ball: Ball };
 type Particle = { x: number; y: number; vx: number; vy: number; life: number; max: number; color: string; size: number };
@@ -27,7 +44,6 @@ function reset(play = true) {
   $('start').classList.toggle('hidden', play); $('win').classList.add('hidden');
   levelSelect.value = String(levelIndex);
   $('course-name').textContent = `HOLE ${levelIndex + 1} / 10`;
-  $('level-idea').textContent = `${levels[levelIndex].idea} Difficulty ${levels[levelIndex].difficulty}/10`;
   setHint('HOLD S / DOWN TO RECALL A RESTING BALL', 7);
   updateHUD();
 }
@@ -117,6 +133,7 @@ function jump(p: Player, i: number) {
   p.grounded = false; p.coyote = 0; beep(p.jumps === 2 ? 620 : 410, .06, 'triangle');
 }
 document.addEventListener('keydown', e => {
+  if (e.target instanceof HTMLSelectElement) return;
   if (e.target instanceof HTMLButtonElement && (e.code === 'Space' || e.code === 'Enter')) return;
   if (controls.some(c => Object.values(c).includes(e.code)) || e.code === 'KeyR') e.preventDefault();
   if (e.repeat) return;
@@ -490,18 +507,21 @@ function win(i: number) {
   if (previous !== null) scores[previous]--;
   results[levelIndex] = i; scores[i]++;
   const complete = results.every(r => r !== null);
-  $('winner').textContent = complete ? scores[0] === scores[1] ? 'MATCH TIED!' : `${scores[0] > scores[1] ? 'CORAL' : 'BLUE'} TAKES THE MATCH!` : `${i === 0 ? 'CORAL' : 'BLUE'} +1 POINT!`;
-  $('winner').style.color = colors[i];
-  $('win-detail').textContent = `CORAL ${scores[0]} — BLUE ${scores[1]} / ${players[i].strokes} SHOTS`;
+  showWinner();
   $('again').textContent = complete ? 'NEW MATCH' : 'NEXT LEVEL ▶';
   $('win').classList.remove('hidden'); burst(hole.x, hole.y - 35, colors[i], 65, 370); beep(800, .4, 'triangle'); updateHUD();
+}
+function showWinner() {
+  const complete=results.every(r=>r!==null),leader=complete?(scores[0]>scores[1]?0:1):winner;
+  $('winner').textContent=complete&&scores[0]===scores[1]?'MATCH TIED!':`${playerName(leader)} ${complete?'TAKES THE MATCH!':'WINS THE HOLE!'}`;
+  $('winner').style.color=colors[leader];
+  $('win-detail').textContent='';
 }
 function updateHUD() {
   players.forEach((p, i) => {
     $(`p${i + 1}-score`).textContent = `${scores[i]} POINT${scores[i] === 1 ? '' : 'S'}`;
     $(`p${i + 1}-state`).textContent = winner === i ? 'WINNER' : p.falling || p.ball.falling ? 'RESETTING...' : p.tumble ? 'AIRTIME!' : p.magnetActive ? 'MAGNET!' : p.magnetHold >= .5 ? 'MAGNET READY' : p.charging ? 'CHARGING' : p.set ? 'AIMING' : `${p.strokes} SHOTS`;
   });
-  $('results').textContent = results.map((r, i) => `${i + 1}:${r === null ? '—' : r === 0 ? 'P1' : 'P2'}`).join('  ');
 }
 function update(dt: number) {
   time += dt;
@@ -598,7 +618,7 @@ function drawHole() {
   rect(hole.x + 12, hole.y - 92, 4, 4, '#f7d4a6');
 }
 function drawPlayer(p: Player, i: number) {
-  const color = colors[i], dark = i ? '#3b708c' : '#a65048', outline = '#263f37';
+  const color = colors[i], dark = palette[selectedColors[i]].dark, outline = '#263f37';
   ctx.save(); ctx.translate(Math.round(p.x), Math.round(p.y));
   if (p.tumble) { if (p.grounded) ctx.translate(0, 11); ctx.rotate(p.rotation); }
   if (!p.tumble && p.flip > 0) ctx.rotate(p.flipDirection * Math.PI * 2 * (1 - p.flip / .46));
@@ -635,7 +655,6 @@ function drawPlayer(p: Player, i: number) {
     rect(19,-12,5,4,'#fff1cf');rect(19,8,5,4,'#fff1cf');ctx.restore();
   }
   if (!p.tumble) {
-    ctx.textAlign = 'center'; ctx.font = '8px Pixel, monospace'; ctx.fillStyle = outline; ctx.fillText(`P${i + 1}`, p.x, p.y - 40); ctx.textAlign = 'left';
     rect(p.x - 9, p.y - 36, 18, 2, color);
   }
 }
@@ -663,13 +682,11 @@ function drawBall(b: Ball, i: number) {
   if(b.progress && Math.hypot(b.progress.x-b.x,b.progress.y-b.y)>40) {
     ctx.save();ctx.globalAlpha=.4;ctx.strokeStyle=colors[i];ctx.lineWidth=2;ctx.setLineDash([3,4]);
     ctx.beginPath();ctx.arc(b.progress.x,b.progress.y,12,0,Math.PI*2);ctx.stroke();ctx.restore();
-    ctx.font='6px Pixel, monospace';ctx.fillStyle=colors[i];ctx.textAlign='center';
-    ctx.fillText(`P${i+1} BEST`,b.progress.x,b.progress.y-18);ctx.textAlign='left';
   }
   ctx.globalAlpha=.2;for(const point of b.visited) rect(point.x-1,point.y-1,2,2,colors[i]);ctx.globalAlpha=1;
   b.trail.forEach((p, j) => { ctx.globalAlpha = j / b.trail.length * .28; ellipse(p.x, p.y, 5, 5, colors[i]); }); ctx.globalAlpha = 1;
   ellipse(b.x, b.y + 8, 10, 3, '#243d322b'); ellipse(b.x, b.y, 9, 9, '#2d4438'); ellipse(b.x, b.y - 1, 7.5, 7.5, colors[i]);
-  rect(b.x - 4, b.y - 5, 3, 3, '#fff7dc'); rect(b.x + 2, b.y - 2, 2, 2, i ? '#498ca5' : '#bf625a'); rect(b.x - 2, b.y + 3, 2, 2, i ? '#498ca5' : '#bf625a');
+  rect(b.x - 4, b.y - 5, 3, 3, '#fff7dc'); rect(b.x + 2, b.y - 2, 2, 2, palette[selectedColors[i]].dark); rect(b.x - 2, b.y + 3, 2, 2, palette[selectedColors[i]].dark);
 }
 function render() {
   ctx.clearRect(0, 0, W, H); background();
@@ -685,13 +702,6 @@ function render() {
   platforms.forEach(drawPlatform);
   const start = levels[levelIndex].start;
   roundRect(start.x - 12, start.y - 2, 150, 5, 2, '#dbe3a6');
-  ctx.font = '8px Pixel, monospace';
-  ctx.fillStyle = '#302943'; ctx.fillText('START', start.x, start.y - 70);
-  levels[levelIndex].labels.forEach(l => {
-    const width = ctx.measureText(l.text).width;
-    rect(l.x - 5, l.y - 12, width + 10, 18, '#fff1cfe0');
-    ctx.fillStyle = '#302943'; ctx.fillText(l.text, l.x, l.y);
-  });
   drawHole(); players.forEach(drawAim);
   players.forEach((p, i) => { ctx.globalAlpha = p.falling ? Math.max(.15, p.falling) : 1; drawPlayer(p, i); ctx.globalAlpha = 1; });
   players.forEach((p, i) => {

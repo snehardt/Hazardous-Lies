@@ -10,7 +10,7 @@ page.on('pageerror',e=>errors.push(e.message));
 await page.addInitScript(()=>{window.requestAnimationFrame=()=>0});
 await page.route('**/dist/main.js',async route=>{
  const response=await route.fetch();
- await route.fulfill({response,body:(await response.text())+'\nwindow.testGame={get players(){return players}, get winner(){return winner}, get platforms(){return platforms},get hole(){return hole},get levelIndex(){return levelIndex},levels,scores,results,keys,reset,loadLevel,newMatch,update,moveBall,movePlayer,jump,hitDown,hitUp,shotSpeed,roundedContact,render,win,recallClear,releaseMagnet,moveMagnet,routeDistance,magnetAngle,trackBall,respawnBall};'});
+ await route.fulfill({response,body:(await response.text())+'\nwindow.testGame={get players(){return players}, get winner(){return winner}, get platforms(){return platforms},get hole(){return hole},get levelIndex(){return levelIndex},levels,scores,results,keys,colors,palette,selectedColors,reset,loadLevel,newMatch,update,moveBall,movePlayer,jump,hitDown,hitUp,shotSpeed,roundedContact,render,win,recallClear,releaseMagnet,moveMagnet,routeDistance,magnetAngle,trackBall,respawnBall};'});
 });
 try {
  await page.goto('http://localhost:5173');
@@ -21,6 +21,28 @@ try {
  assert.equal(await page.locator('#start').isVisible(),false);
  assert.equal(await page.locator('#level-select option').count(),10);
  assert.equal(await page.evaluate(()=>window.testGame.levels.filter(l=>l.idea.includes('three stacked fairways')).length),1,'Only one S course');
+ assert.deepEqual(await page.locator('#p1-color option').allTextContents(),['RED','BLUE','GREEN','YELLOW','PURPLE','ORANGE']);
+ assert.equal(await page.locator('#p2-color option').count(),6);
+ assert.equal(await page.locator('#level-idea, #results, .tiny-title').count(),0);
+ await page.selectOption('#p1-color','4');await page.selectOption('#p2-color','2');
+ const customization=await page.evaluate(()=>{
+  const t=window.testGame,out={};
+  out.independentColors=t.colors[0]===t.palette[4].color&&t.colors[1]===t.palette[2].color;
+  t.loadLevel(3);out.colorsSurviveLevel=t.selectedColors[0]===4&&t.selectedColors[1]===2;
+  t.newMatch();out.colorsSurviveMatch=t.selectedColors[0]===4&&t.selectedColors[1]===2;
+  t.hitDown(0);t.hitDown(0);t.players[0].power=.6;t.hitUp(0);out.shotsDoNotAwardPoints=t.scores.every(s=>s===0);
+  t.loadLevel(0);out.levelChangesDoNotAwardPoints=t.scores.every(s=>s===0);
+  const b=t.players[1].ball;b.x=t.hole.x;b.y=t.hole.y-8;b.resting=true;t.moveBall(b,1/120,1);
+  out.cupAwardsOwner=t.scores[0]===0&&t.scores[1]===1&&document.querySelector('#p2-score').textContent==='1 POINT';
+  out.winnerUsesSelectedColor=document.querySelector('#winner').textContent.includes('P2 GREEN');
+  t.newMatch();const context=document.querySelector('#game').getContext('2d'),original=context.fillText,words=[];
+  context.fillText=function(text,...args){words.push(text);return original.call(this,text,...args)};t.render();context.fillText=original;
+  out.cleanCourse=words.length===0;
+  return out;
+ });
+ console.log('Colors, clean UI and scoring:',customization);for(const [name,passed]of Object.entries(customization))assert.equal(passed,true,name);
+ for(const value of ['0','1','2','3','4','5'])await page.selectOption('#p1-color',value);
+ await page.selectOption('#p1-color','0');await page.selectOption('#p2-color','1');
  const checks=await page.evaluate(()=>{
   const t=window.testGame, dt=1/120, checks={};
   t.newMatch(); const p=t.players[0];
@@ -366,7 +388,7 @@ try {
  // Complete the match through the actual next-level button, rather than loading directly.
  for(let i=0;i<10;i++) {
   await page.evaluate(i=>{const t=window.testGame;t.win(i%2);t.render()},i);
-  assert.match(await page.locator('#win-detail').innerText(),/CORAL/);
+  if(i<9)assert.match(await page.locator('#winner').innerText(),/P[12] (RED|BLUE)/);
   if(i===9) assert.equal(await page.locator('#winner').innerText(),'MATCH TIED!');
   await page.click('#again');
   assert.equal(await page.evaluate(()=>window.testGame.levelIndex),i===9?0:i+1);

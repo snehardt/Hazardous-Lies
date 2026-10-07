@@ -20,7 +20,7 @@ Open http://localhost:5173. The compiled game also works on a static web host: u
 
 ## Controls
 
-| Action | Coral | Blue |
+| Action | Player 1 (Red by default) | Player 2 (Blue by default) |
 | --- | --- | --- |
 | Move | A / D | Left / Right |
 | Jump, double jump, wall jump | W | Up |
@@ -31,6 +31,8 @@ Open http://localhost:5173. The compiled game also works on a static web host: u
 | Recall a resting ball while not aiming | Hold S | Hold Down |
 
 The first press sets; the next press charges, and releasing hits. A nearby slow or resting ball can be hit even beneath a ledge, inside a low tunnel, or between slopes. Aiming keeps the golfer where they are; it does not teleport them into a fixed stance. The golfer continues to obey terrain and gravity while aiming. Double jumps trigger a front flip in the facing direction; landing and respawning clear the flip. Player shadows are removed. Clubs only hit their owner's ball. Fast balls can bounce off either golfer and launch them; balls can also collide with each other. Switching away pauses the game and clears held keys. H shows controls and M toggles optional sound.
+
+Each player can choose Red, Blue, Green, Yellow, Purple or Orange from the selector in their corner panel. Colors apply to the golfer, ball, magnet and effects, and remain selected when changing arenas or starting a new match. Players keep independent scores even when they choose the same color.
 
 ## Arenas and match rules
 
@@ -47,7 +49,7 @@ Use the Arena selector to test any of the ten courses. Every arena fits on scree
 9. Bank Statement — a solid central hill with a broad sand crest leads into an enclosed ricochet valley and raised goal green.
 10. Crossing the Streams — connected valley slopes climb to a ball tunnel, then descend into a broad bowl and flat goal green.
 
-The first ball captured by the cup earns one point and ends that hole. Next Level advances to an unplayed arena. After all ten holes, the game announces the match winner or a tie. The scoreboard tracks both points and the winner of each hole.
+The first ball captured by the cup earns one point and ends that hole. Next Level advances to an unplayed arena. After all ten holes, the game announces the match winner or a tie. Points appear only in the corresponding player panel and are awarded when that player’s ball enters the cup. The course has no instructional labels or description rows below the arena selector.
 
 R or the restart button replays the current arena while keeping match results. A replay replaces that hole's previous result when somebody wins; it cannot farm extra points. New Match clears points and results and starts at hole one. Results last for the current browser session.
 
@@ -55,7 +57,7 @@ There are **no checkpoints**. Entering water or a trap pit, or falling out of th
 
 Sand absorbs ball impacts and stops rolling almost completely. Shots from sand have **80% of normal launch speed**, including the trajectory guide. Grass retains bouncing and rolling physics until the ball settles. A settled ball stays fixed until a golf shot or a fast ball impact wakes it. Walking into balls cannot push them, and slow balls cannot shove golfers. Moving balls still knock golfers over. Fast balls use collision substeps to avoid passing through thin platforms.
 
-Hold S / Down while not aiming to recall your own resting ball, when the ball is further along the course than you, or to recover lost progress in an area the ball already reached. Each ball records its explored trail and furthest progress using ball-sized routes around terrain to the cup. A faint trail and BEST marker show that progress. The record survives water resets and backward collisions, allowing recovery toward your golfer up to the previously reached area. It cannot unlock unexplored forward progress, and restarting an arena clears the record. A U-shaped magnet points its open end toward the ball after half a second; pulling starts after one second and accelerates while held. The ball passes through walls, so it can escape tunnels. Release to stop pulling; the ball keeps its momentum. Releasing inside terrain returns it to the last clear position along its recall path. The recalled ball knocks other golfers into the air along its path, and a fast arrival also knocks its owner over. Release the key before starting another recall. Moving balls cannot activate the magnet, and Down still adjusts the angle while aiming.
+Hold S / Down while not aiming to recall your own resting ball, when the ball is further along the course than you, or to recover lost progress in an area the ball already reached. Each ball records its explored trail and furthest progress using ball-sized routes around terrain to the cup. A faint trail and circular marker show that progress. The record survives water resets and backward collisions, allowing recovery toward your golfer up to the previously reached area. It cannot unlock unexplored forward progress, and restarting an arena clears the record. A U-shaped magnet points its open end toward the ball after half a second; pulling starts after one second and accelerates while held. The ball passes through walls, so it can escape tunnels. Release to stop pulling; the ball keeps its momentum. Releasing inside terrain returns it to the last clear position along its recall path. The recalled ball knocks other golfers into the air along its path, and a fast arrival also knocks its owner over. Release the key before starting another recall. Moving balls cannot activate the magnet, and Down still adjusts the angle while aiming.
 
 ## Validation
 
