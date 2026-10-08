@@ -110,3 +110,9 @@ Override binding in PowerShell with `$env:PORT='5174'` and optionally `$env:HOST
 ### Online validation
 
 `pnpm run test:rooms` starts an ephemeral server and checks requests, invalid/full rooms, host-only starts, player identity, disconnect cleanup, host transfer and slot reuse. `pnpm run test:online` uses four separate browser sessions against a running server (default http://localhost:5173; override with TEST_URL). It checks the menu/lobby flow, ownership, double jump, scaled mouse aiming, swings, Player 4 wins, level synchronization, reconnect slot reuse and return to local. It uses the same PLAYWRIGHT_PATH and BROWSER_CHANNEL settings as the existing campaign suite and saves lobby/game screenshots under artifacts/. `pnpm test` continues to run the original local campaign regression suite.
+
+## Free public multiplayer hosting
+
+The included `render.yaml` deploys the entire game and Socket.IO server together as one **Free** Render web service. Start at [Deploy to Render](https://render.com/deploy?repo=https://github.com/snehardt/Hazardous-Lies), sign in, and review the Blueprint. Keep the service on the Free plan. Once deployment succeeds, share the assigned `https://…onrender.com` URL with every player. That link supports both local and online modes; the GitHub Pages link remains local-only because it cannot run Node.js.
+
+Render's free service sleeps after 15 minutes without incoming traffic and takes about a minute to wake. Rooms are held in memory and disappear on restart or redeploy. For no charges, do not add a payment method: Render's documentation says it suspends services when free allowances are exceeded without a payment method. See [free limits](https://render.com/docs/free) and [billing FAQ](https://render.com/docs/faq).
