@@ -1,10 +1,10 @@
 # Hazardous Lies
 
-A two-player, same-keyboard golf platformer with ten complete fixed-screen arenas, double jumps, wall jumps, and golf balls that turn player collisions into ridiculous airtime.
+A golf platformer with two-player same-keyboard local play and 2–4 player online rooms with ten complete fixed-screen arenas, double jumps, wall jumps, and golf balls that turn player collisions into ridiculous airtime.
 
 ## Run
 
-Play online: [Hazardous Lies](https://snehardt.github.io/Hazardous-Lies/).
+Static local-play version: [Hazardous Lies](https://snehardt.github.io/Hazardous-Lies/).
 
 GitHub Pages builds and publishes the game automatically when changes are pushed to `main`. Both players share one keyboard on the computer opening the link.
 
@@ -76,3 +76,37 @@ Separate tower checks verify all three intended shelf lifts and their clearances
 
 
 
+
+## Online multiplayer (Node.js + Socket.IO)
+
+The opening menu offers **Play Local** (the original controls) and **Play Online**.
+Run the Node server on one computer:
+
+```sh
+pnpm install
+pnpm run build
+pnpm run dev
+```
+
+npm install / npm run build / npm run dev work too. The server listens on **0.0.0.0:5173** by default. Open http://localhost:5173 on that computer. On another computer on the same network, open **http://SERVER_LAN_IP:5173** (find the host's IPv4 address with ipconfig). Allow Node through the host firewall for your private network if prompted. Both browsers must open the same Node server. A room code identifies a room on that server; it is not a server address.
+
+Use Play Online → Create Room; share the four-character code; other clients choose Join Room. The lobby shows all four numbered slots. Only the host can start, and at least two players are required. During a match, joins are rejected. A client leaving or losing its connection returns the remaining players to the lobby and frees its slot. The next start begins a new match. If the host leaves, the lowest occupied slot becomes host. Empty rooms are deleted. Reconnected clients must explicitly rejoin; disconnected slots are not reserved.
+
+Every online client controls only its assigned player: **A/D** move, **W** jump/double jump/wall jump, **S** recalls. Aim with the mouse; **hold left click to charge and release to swing** near your own slow/stationary ball. A short click produces a minimum-power swing. The cursor is converted from CSS-scaled canvas coordinates into the 1280×640 game world; the direction originates at your ball. Keyboard angle adjustment is disabled online. Existing shot power, terrain, collisions, ball physics, recall and knockback functions are reused. The host controls arena selection, restart and next level. Local color choices are restored when leaving online mode; online colors follow player slots.
+
+### Architecture and assignment request flow
+
+- Node's HTTP server listens on an IP/port and serves the game plus Socket.IO.
+- Clients send create-room, join-room, start-game and leave-room requests. The server validates membership, capacity and host privileges, responds with acknowledgements/errors, and broadcasts lobby state.
+- The server generates unique codes using cryptographic random selection, excluding 0/O and 1/I. Rooms exist only in memory.
+- Clients send input requests. The server assigns their identity from the socket's room slot, validates actions, limits input rate and forwards them only to the host.
+- **The host browser simulates the match**, using the same existing 120 Hz physics and rendering code as local play. All player/ball pairs participate in the existing collision rule. The host sends snapshots at 30 Hz; the server accepts snapshots only from that room's host and forwards them only to that room. Guests render those snapshots without running competing physics.
+- Each start/disconnect changes a server-owned match epoch, rejecting packets from the previous match. Disconnect handling removes membership, transfers hosting, notifies peers, frees slots, and deletes empty rooms without stopping the server.
+
+This is a server-mediated, host-simulated architecture, not cheat-resistant server-side physics. The host must keep the game tab open and visible: browsers throttle background tabs. Guests see network latency because prediction/interpolation is not implemented. The server provides validation and room isolation but trusts the host's simulation. For play outside your LAN, run this same Node service on a reachable server with HTTPS/WebSocket support; GitHub Pages alone cannot run it. No accounts, persistence, or automatic match-resume are implemented.
+
+Override binding in PowerShell with `$env:PORT='5174'` and optionally `$env:HOST='0.0.0.0'` before running the server. Restart any older server process after updating this code. Builds must be rerun after TypeScript edits.
+
+### Online validation
+
+`pnpm run test:rooms` starts an ephemeral server and checks requests, invalid/full rooms, host-only starts, player identity, disconnect cleanup, host transfer and slot reuse. `pnpm run test:online` uses four separate browser sessions against a running server (default http://localhost:5173; override with TEST_URL). It checks the menu/lobby flow, ownership, double jump, scaled mouse aiming, swings, Player 4 wins, level synchronization, reconnect slot reuse and return to local. It uses the same PLAYWRIGHT_PATH and BROWSER_CHANNEL settings as the existing campaign suite and saves lobby/game screenshots under artifacts/. `pnpm test` continues to run the original local campaign regression suite.

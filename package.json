@@ -7,9 +7,15 @@
     "dev": "node server.mjs",
     "build": "tsc",
     "check": "tsc --noEmit",
-    "test": "node tests/smoke.mjs"
+    "test": "node tests/smoke.mjs",
+    "test:rooms": "node tests/rooms.mjs",
+    "test:online": "node tests/online.mjs"
   },
   "devDependencies": {
     "typescript": "^5.9.3"
+  },
+  "dependencies": {
+    "socket.io": "^4.8.4",
+    "socket.io-client": "^4.8.4"
   }
 }

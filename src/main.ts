@@ -1,4 +1,13 @@
 import { levels, type Platform } from './levels.js';
+import { connectOnline, type Room } from './online.js';
+let online = false, room: Room | null = null, onlineSlots: number[] = [];
+let socket: Awaited<ReturnType<typeof connectOnline>> | undefined;
+const onlineKeys = Array.from({length:4}, () => new Set<string>());
+const aims = Array.from({length:4}, () => ({x:640,y:200}));
+const isHost = () => !!room && socket?.id === room.host;
+const canManage = () => !online || (isHost() && room?.phase==='playing');
+const inputKeys = (i:number) => online ? onlineKeys[i] : keys;
+const inputControls = (i:number) => online ? controls[0] : controls[i];
 const canvas = document.querySelector<HTMLCanvasElement>('#game')!;
 const ctx = canvas.getContext('2d')!;
 const $ = (id: string) => document.getElementById(id)!;
@@ -10,7 +19,7 @@ const palette = [
 ];
 const selectedColors = [0,1];
 const colors = selectedColors.map(index=>palette[index].color);
-const playerName = (i:number) => `P${i+1} ${palette[selectedColors[i]].name.toUpperCase()}`;
+const playerName = (i:number) => `P${online ? onlineSlots[i]+1 : i+1} ${palette[selectedColors[i]].name.toUpperCase()}`;
 selectedColors.forEach((index,i)=>{
   const select=$(`p${i+1}-color`) as HTMLSelectElement;
   palette.forEach((color,index)=>select.add(new Option(color.name.toUpperCase(),String(index))));select.value=String(index);
@@ -38,8 +47,9 @@ let hintTimer = 0;
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
 function reset(play = true) {
   const { x: sx, y: sy } = levels[levelIndex].start;
-  players = [sx, sx + 65].map((x, i) => ({ x, y: sy - 24, vx: 0, vy: 0, grounded: true, jumps: 0, wall: 0, coyote: .1, facing: 1, set: false, charging: false, power: 0, angle: Math.PI / 4, tumble: false, recovery: 0, rotation: 0, flip: 0, flipDirection: 1, anim: 0, swing: 0, strokes: 0, falling: 0, magnetHold: 0, magnetActive: false, magnetUsed: false, magnetSpeed: 0,
+  players = Array.from({length:online ? onlineSlots.length : 2}, (_,i)=>sx+i*65).map((x, i) => ({ x, y: sy - 24, vx: 0, vy: 0, grounded: true, jumps: 0, wall: 0, coyote: .1, facing: 1, set: false, charging: false, power: 0, angle: Math.PI / 4, tumble: false, recovery: 0, rotation: 0, flip: 0, flipDirection: 1, anim: 0, swing: 0, strokes: 0, falling: 0, magnetHold: 0, magnetActive: false, magnetUsed: false, magnetSpeed: 0,
     ball: { x: x + 28, y: sy - 9, vx: 0, vy: 0, grounded: true, grace: 0, falling: 0, resting: true, recallClear: null, progress:null, visited:[], settle: 0, trail: [] } }));
+  onlineKeys.forEach(k=>k.clear());
   particles = []; winner = -1; started = play; paused = false; keys.clear();
   $('start').classList.toggle('hidden', play); $('win').classList.add('hidden');
   levelSelect.value = String(levelIndex);
@@ -48,11 +58,12 @@ function reset(play = true) {
   updateHUD();
 }
 function loadLevel(index: number) {
+  if (!canManage()) return;
   levelIndex = clamp(index, 0, levels.length - 1);
   platforms = levels[levelIndex].platforms; hole = levels[levelIndex].hole;
   reset(); canvas.focus();
 }
-function newMatch() { scores.fill(0); results.fill(null); loadLevel(0); }
+function newMatch() { if (!canManage()) return; scores.fill(0); results.fill(null); loadLevel(0); }
 function respawnPlayer(p: Player, i: number) {
   releaseMagnet(p);
   const start = levels[levelIndex].start;
@@ -133,7 +144,8 @@ function jump(p: Player, i: number) {
   p.grounded = false; p.coyote = 0; beep(p.jumps === 2 ? 620 : 410, .06, 'triangle');
 }
 document.addEventListener('keydown', e => {
-  if (e.target instanceof HTMLSelectElement) return;
+  if (e.target instanceof HTMLSelectElement || e.target instanceof HTMLInputElement) return;
+  if (online) { onlineKeyboard(e, true); return; }
   if (e.target instanceof HTMLButtonElement && (e.code === 'Space' || e.code === 'Enter')) return;
   if (controls.some(c => Object.values(c).includes(e.code)) || e.code === 'KeyR') e.preventDefault();
   if (e.repeat) return;
@@ -150,16 +162,17 @@ document.addEventListener('keydown', e => {
     if (e.code === c.hit) hitDown(i);
   });
 });
-document.addEventListener('keyup', e => { keys.delete(e.code); if (started && winner < 0 && !paused) controls.forEach((c, i) => { if (e.code === c.hit) hitUp(i); }); });
-window.addEventListener('blur', () => { keys.clear(); paused = true; players.forEach(p => { p.charging = false; p.power = 0; releaseMagnet(p); }); });
+document.addEventListener('keyup', e => { if (online) { onlineKeyboard(e, false); return; } keys.delete(e.code); if (started && winner < 0 && !paused) controls.forEach((c, i) => { if (e.code === c.hit) hitUp(i); }); });
+window.addEventListener('blur', () => { if (online) { sendInput('clear'); return; } keys.clear(); paused = true; players.forEach(p => { p.charging = false; p.power = 0; releaseMagnet(p); }); });
 window.addEventListener('focus', () => { paused = false; last = performance.now(); accumulator = 0; });
-document.addEventListener('visibilitychange', () => { if (document.hidden) { keys.clear(); players.forEach(releaseMagnet); paused = true; } else { paused = false; last = performance.now(); accumulator = 0; } });
+document.addEventListener('visibilitychange', () => { if (online) { if(document.hidden) sendInput('clear'); return; } if (document.hidden) { keys.clear(); players.forEach(releaseMagnet); paused = true; } else { paused = false; last = performance.now(); accumulator = 0; } });
 $('play').addEventListener('click', () => { reset(); canvas.focus(); });
 $('again').addEventListener('click', () => {
+  if (!canManage()) return;
   if (results.every(r => r !== null)) newMatch();
   else { const next = results.findIndex((r, i) => r === null && i > levelIndex); loadLevel(next >= 0 ? next : results.findIndex(r => r === null)); }
 });
-$('restart').addEventListener('click', () => { reset(); canvas.focus(); });
+$('restart').addEventListener('click', () => { if (!canManage()) return; reset(); canvas.focus(); });
 function toggleSound() {
   sound = !sound;
   $('sound').setAttribute('aria-pressed', String(sound));
@@ -167,7 +180,7 @@ function toggleSound() {
   beep(600); canvas.focus();
 }
 function toggleHelp() {
-  const open = $('help-panel').classList.toggle('hidden') === false;
+  const open = $(online ? 'online-help' : 'help-panel').classList.toggle('hidden') === false;
   $('help').setAttribute('aria-expanded', String(open));
   $('help').setAttribute('aria-label', `${open ? 'Hide' : 'Show'} controls (H)`);
   canvas.focus();
@@ -213,15 +226,18 @@ function integratePlayer(p: Player, dt: number, i: number) {
     return;
   }
   if (inHazard(p.x, p.y, 24)) { beginFall(p); return; }
-  const c = controls[i], wasGrounded = p.grounded;
+  const c = inputControls(i), keys = inputKeys(i), wasGrounded = p.grounded;
   const oldX = p.x;
   p.swing = Math.max(0, p.swing - dt); p.anim += dt * (Math.abs(p.vx) > 30 ? 12 : 3);
   if (p.set && !p.tumble) {
     if (p.ball.falling || Math.hypot(p.ball.vx, p.ball.vy) > 90 || Math.hypot(p.x - p.ball.x, p.y - (p.ball.y - 16)) > 130) { p.set = false; p.charging = false; }
     else {
+      if (online) aimPlayer(i);
+      else {
       if (keys.has(c.left)) p.facing = -1;
       if (keys.has(c.right)) p.facing = 1;
       p.angle = clamp(p.angle + ((keys.has(c.up) ? 1 : 0) - (keys.has(c.down) ? 1 : 0)) * dt * 1.25, 0, Math.PI * .48);
+      }
       if (p.charging) p.power = Math.min(1, p.power + dt * .66);
     }
   }
@@ -436,11 +452,11 @@ function releaseMagnet(p: Player) {
   }
   p.magnetHold = 0; p.magnetActive = false; p.magnetSpeed = 0;
   const owner = players.indexOf(p);
-  if (owner >= 0 && !keys.has(controls[owner].down)) p.magnetUsed = false;
+  if (owner >= 0 && !inputKeys(owner).has(inputControls(owner).down)) p.magnetUsed = false;
 }
 function moveMagnet(p: Player, dt: number, owner: number) {
   const b = p.ball;
-  if (!keys.has(controls[owner].down) || p.set || p.tumble || p.falling || b.falling) {
+  if (!inputKeys(owner).has(inputControls(owner).down) || p.set || p.tumble || p.falling || b.falling) {
     releaseMagnet(p); return false;
   }
   if (!p.magnetActive) {
@@ -512,12 +528,15 @@ function win(i: number) {
   $('win').classList.remove('hidden'); burst(hole.x, hole.y - 35, colors[i], 65, 370); beep(800, .4, 'triangle'); updateHUD();
 }
 function showWinner() {
-  const complete=results.every(r=>r!==null),leader=complete?(scores[0]>scores[1]?0:1):winner;
-  $('winner').textContent=complete&&scores[0]===scores[1]?'MATCH TIED!':`${playerName(leader)} ${complete?'TAKES THE MATCH!':'WINS THE HOLE!'}`;
+  const complete=results.every(r=>r!==null), best=Math.max(...scores), leader=complete?scores.indexOf(best):winner;
+  $('winner').textContent=complete&&scores.filter(s=>s===best).length>1?'MATCH TIED!':`${playerName(leader)} ${complete?'TAKES THE MATCH!':'WINS THE HOLE!'}`;
   $('winner').style.color=colors[leader];
   $('win-detail').textContent='';
 }
 function updateHUD() {
+  if (online) {
+    $('online-score').replaceChildren(...players.map((p,i)=>{ const el=document.createElement('span'); el.style.borderColor=colors[i]; el.textContent=`P${onlineSlots[i]+1}${room?.players[onlineSlots[i]]?.id===socket?.id ? " (YOU)" : ""} · ${scores[i]} POINTS · ${p.strokes} SHOTS`; return el; })); return;
+  }
   players.forEach((p, i) => {
     $(`p${i + 1}-score`).textContent = `${scores[i]} POINT${scores[i] === 1 ? '' : 'S'}`;
     $(`p${i + 1}-state`).textContent = winner === i ? 'WINNER' : p.falling || p.ball.falling ? 'RESETTING...' : p.tumble ? 'AIRTIME!' : p.magnetActive ? 'MAGNET!' : p.magnetHold >= .5 ? 'MAGNET READY' : p.charging ? 'CHARGING' : p.set ? 'AIMING' : `${p.strokes} SHOTS`;
@@ -525,15 +544,17 @@ function updateHUD() {
 }
 function update(dt: number) {
   time += dt;
-  if (started && winner < 0 && !paused) {
+  if (started && winner < 0 && !paused && (!online || isHost())) {
     players.forEach((p, i) => movePlayer(p, dt, i));
     players.forEach((p, i) => { if (winner < 0) moveBall(p.ball, dt, i); });
-    const a = players[0].ball, b = players[1].ball, dx = b.x - a.x, dy = b.y - a.y, d = Math.hypot(dx, dy);
+    for (let ai=0;ai<players.length;ai++) for(let bi=ai+1;bi<players.length;bi++) {
+    const a = players[ai].ball, b = players[bi].ball, dx = b.x - a.x, dy = b.y - a.y, d = Math.hypot(dx, dy);
     if (winner < 0 && !players.some(p => p.magnetActive) && !a.falling && !b.falling && (!a.resting || !b.resting) && Math.max(Math.hypot(a.vx,a.vy), Math.hypot(b.vx,b.vy)) > 120 && d < 18 && d > .001) {
       const nx = dx / d, ny = dy / d, overlap = (18 - d) / 2;
       a.x -= nx * overlap; a.y -= ny * overlap; b.x += nx * overlap; b.y += ny * overlap;
       const velocity = (b.vx - a.vx) * nx + (b.vy - a.vy) * ny;
       if (velocity < 0) { a.resting = b.resting = false; a.settle = b.settle = 0; const impulse = velocity * .91; a.vx += impulse * nx; a.vy += impulse * ny; b.vx -= impulse * nx; b.vy -= impulse * ny; }
+    }
     }
     hintTimer -= dt;
     if (hintTimer <= 0) $('hint').textContent = '';
@@ -718,3 +739,101 @@ function frame(now: number) {
   render(); requestAnimationFrame(frame);
 }
 reset(false); requestAnimationFrame(frame);
+
+// Online adapters use the existing simulation and renderer. Only the room host steps physics.
+function sendInput(action:string, down?:boolean, x?:number, y?:number) {
+  if (online && room?.phase==='playing' && socket?.connected) socket.emit('input', {epoch:room.epoch,action,down,x,y});
+}
+function aimPlayer(i:number) {
+  const p=players[i], aim=aims[i], dx=aim.x-p.ball.x, dy=aim.y-p.ball.y;
+  p.facing=dx<0?-1:1; p.angle=Math.atan2(-dy, Math.abs(dx));
+}
+function receiveInput(data:any) {
+  if (!isHost() || room?.phase!=='playing' || data.epoch!==room.epoch) return;
+  const i=onlineSlots.indexOf(data.slot), p=players[i]; if (!p) return;
+  const held=onlineKeys[i];
+  if (data.action==='clear') { held.clear(); p.charging=false; p.power=0; releaseMagnet(p); return; }
+  if (data.action==='aim') { aims[i]={x:data.x,y:data.y}; if(p.set)aimPlayer(i); return; }
+  if (winner>=0) return;
+  const key=({left:'KeyA',right:'KeyD',jump:'KeyW',recall:'KeyS',swing:'Mouse'} as Record<string,string>)[data.action];
+  if (!key) return;
+  const was=held.has(key); if(data.down)held.add(key);else held.delete(key);
+  if(data.action==='jump' && data.down && !was) jump(p,i);
+  if(data.action==='swing') {
+    if(data.down && !was) { if(!p.set)hitDown(i); if(p.set){hitDown(i);aimPlayer(i);} }
+    if(!data.down && was) { aimPlayer(i); hitUp(i); }
+  }
+}
+function onlineKeyboard(e:KeyboardEvent, down:boolean) {
+  if(e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement) return;
+  const action=({KeyA:'left',KeyD:'right',KeyW:'jump',KeyS:'recall'} as Record<string,string>)[e.code];
+  if(action) { e.preventDefault(); if(!e.repeat)sendInput(action,down); }
+  if(down && !e.repeat) { if(e.code==='KeyH')toggleHelp(); if(e.code==='KeyM')toggleSound(); if(e.code==='KeyR' && isHost() && room?.phase==='playing')reset(); }
+}
+function pointerAim(e:MouseEvent) {
+  const rect=canvas.getBoundingClientRect();
+  // The fixed-screen world spans W by H; account for CSS scaling and canvas offset.
+  sendInput('aim',undefined,(e.clientX-rect.left)*W/rect.width,(e.clientY-rect.top)*H/rect.height);
+}
+let lastAim=0;
+canvas.addEventListener('mousemove',e=>{if(performance.now()-lastAim>33){pointerAim(e);lastAim=performance.now();}});
+canvas.addEventListener('mousedown',e=>{if(online && e.button===0){e.preventDefault();canvas.focus();pointerAim(e);sendInput('swing',true);}});
+window.addEventListener('mouseup',e=>{if(online && e.button===0){pointerAim(e);sendInput('swing',false);}});
+function receiveSnapshot(state:any) {
+  if (!online || isHost() || room?.phase!=='playing' || state.epoch!==room.epoch) return;
+  levelIndex=state.levelIndex; platforms=levels[levelIndex].platforms;hole=levels[levelIndex].hole;
+  players=state.players; scores.splice(0,scores.length,...state.scores);results.splice(0,results.length,...state.results);
+  winner=state.winner;time=state.time;started=true;paused=false;
+  $('again').textContent='WAITING FOR HOST';
+  levelSelect.value=String(levelIndex);$('course-name').textContent=`HOLE ${levelIndex+1} / 10`;
+  $('win').classList.toggle('hidden',winner<0);if(winner>=0)showWinner();updateHUD();
+}
+setInterval(()=>{
+  if(online && isHost() && room?.phase==='playing') socket?.emit('snapshot',{epoch:room.epoch,players,levelIndex,scores,results,winner,time});
+}, 1000/30);
+function receiveRoom(next:Room) {
+  const start=next.phase==='playing' && (room?.phase!=='playing' || room.epoch!==next.epoch);
+  room=next;
+  $('room-actions').classList.add('hidden');$('lobby').classList.remove('hidden');
+  $('lobby-code').textContent=`ROOM ${room.code}`;
+  $('your-player').textContent=`YOU ARE PLAYER ${room.players.find(p=>p?.id===socket?.id)!.slot+1}${isHost()?' · HOST':''}`;
+  $('lobby-players').replaceChildren(...room.players.map((p,i)=>{const el=document.createElement('div');el.textContent=`Player ${i+1} - ${p?'Connected':'Waiting...'}${p?.id===room!.host?' (Host)':''}`;return el;}));
+  ($('start-game') as HTMLButtonElement).disabled=!isHost() || room.players.filter(Boolean).length<2;
+  ['level-select','new-match','restart','again'].forEach(id=>($(id) as HTMLButtonElement).disabled=!canManage());
+  $('online-menu').classList.toggle('hidden',room.phase==='playing');
+  $('online-score').classList.toggle('hidden',room.phase!=='playing');
+  if(room.phase==='lobby'){started=false;keys.clear();onlineKeys.forEach(k=>k.clear());$('win').classList.add('hidden');}
+  if(start){
+    onlineSlots=room.players.filter(p=>p!==null).map(p=>p.slot);
+    selectedColors.splice(0,selectedColors.length,...onlineSlots);colors.splice(0,colors.length,...onlineSlots.map(i=>palette[i].color));
+    scores.splice(0,scores.length,...onlineSlots.map(()=>0));results.fill(null);levelIndex=0;platforms=levels[0].platforms;hole=levels[0].hole;
+    reset();canvas.focus();
+  }
+}
+function lostConnection(){room=null;started=false;onlineKeys.forEach(k=>k.clear());$('online-menu').classList.remove('hidden');$('room-actions').classList.remove('hidden');$('lobby').classList.add('hidden');$('win').classList.add('hidden');$('online-score').classList.add('hidden');}
+let pending=false;
+function requestRoom(event:string,data:unknown=null){
+  if(pending)return;
+  if(!socket?.connected){$('online-status').textContent='Not connected yet. Check that the Node server is running.';return;}
+  pending=true; $('online-status').textContent='Waiting for server…';
+  const timer=setTimeout(()=>{pending=false;$('online-status').textContent='Request timed out. Reconnect and try again.';},5000);
+  socket.emit(event,data,(reply:{error?:string})=>{clearTimeout(timer);pending=false;$('online-status').textContent=reply.error || 'Ready. Share the room code with friends.';});
+}
+$('play-online').addEventListener('click',async()=>{
+  online=true;started=false;keys.clear();document.body.classList.add('online');$('start').classList.add('hidden');$('online-menu').classList.remove('hidden');$('help-panel').classList.add('hidden');$('leave-online').classList.remove('hidden');
+  ['level-select','new-match','restart','again'].forEach(id=>($(id) as HTMLButtonElement).disabled=true);
+  $('online-status').textContent='Connecting…';
+  try{const connected=await connectOnline(receiveRoom,receiveInput,receiveSnapshot,lostConnection);if(!online){connected.disconnect();return;}socket=connected;}catch(error){$('online-status').textContent=(error as Error).message;}
+});
+$('create-room').addEventListener('click',()=>requestRoom('create-room'));
+$('join-room').addEventListener('click',()=>requestRoom('join-room',($('room-code') as HTMLInputElement).value));
+$('start-game').addEventListener('click',()=>requestRoom('start-game'));
+function leaveOnline(){
+  socket?.disconnect();socket=undefined;room=null;online=false;pending=false;document.body.classList.remove('online');
+  ['online-menu','online-score','online-help','leave-online'].forEach(id=>$(id).classList.add('hidden'));
+  ['level-select','new-match','restart','again'].forEach(id=>($(id) as HTMLButtonElement).disabled=false);
+  selectedColors.splice(0,selectedColors.length,...[1,2].map(i=>Number(($(`p${i}-color`) as HTMLSelectElement).value)));
+  colors.splice(0,colors.length,...selectedColors.map(i=>palette[i].color));scores.splice(0,scores.length,0,0);results.fill(null);
+  levelIndex=0;platforms=levels[0].platforms;hole=levels[0].hole;reset(false);
+}
+$('online-back').addEventListener('click',leaveOnline);$('leave-online').addEventListener('click',leaveOnline);
