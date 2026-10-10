@@ -56,6 +56,7 @@ export function attachRooms(io) {
       if (now - (socket.data.inputWindow || 0) > 1000) { socket.data.inputWindow = now; socket.data.inputCount = 0; }
       if (++socket.data.inputCount > 240) return;
       io.to(r.host).emit('input', { slot: r.slots.indexOf(socket.id), epoch: r.epoch, action: data.action,
+        seq: Number.isSafeInteger(data.seq) && data.seq > 0 ? data.seq : 0,
         down: data.down, x: Math.max(-1280, Math.min(2560, data.x || 0)), y: Math.max(-640, Math.min(1280, data.y || 0)) });
     });
     socket.on('snapshot', data => {
@@ -65,7 +66,7 @@ export function attachRooms(io) {
       const now = Date.now();
       if (now - (socket.data.snapshotAt || 0) < 25) return;
       socket.data.snapshotAt = now;
-      socket.to(r.code).emit('snapshot', data);
+      socket.to(r.code).volatile.emit('snapshot', data);
     });
     socket.on('disconnect', leave);
   });

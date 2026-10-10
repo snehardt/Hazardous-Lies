@@ -13,7 +13,7 @@ await page.route('**/dist/main.js',async route=>{
  await route.fulfill({response,body:(await response.text())+'\nwindow.testGame={get players(){return players}, get winner(){return winner}, get platforms(){return platforms},get hole(){return hole},get levelIndex(){return levelIndex},levels,scores,results,keys,colors,palette,selectedColors,reset,loadLevel,newMatch,update,moveBall,movePlayer,jump,hitDown,hitUp,shotSpeed,roundedContact,render,win,recallClear,releaseMagnet,moveMagnet,routeDistance,magnetAngle,trackBall,respawnBall};'});
 });
 try {
- await page.goto('http://localhost:5173');
+ await page.goto(process.env.TEST_URL || 'http://localhost:5173');
  await page.waitForFunction(()=>!!window.testGame);
  await page.evaluate(()=>document.fonts.ready);
  await mkdir('artifacts/levels',{recursive:true});

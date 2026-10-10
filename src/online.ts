@@ -1,5 +1,5 @@
 export type Room = { code: string; host: string; phase: string; epoch: number; players: ({ id: string; slot: number } | null)[] };
-type Socket = { id: string; connected: boolean; on: (event: string, handler: (...args: any[]) => void) => void; emit: (event: string, ...args: any[]) => void; disconnect: () => void };
+type Socket = { id: string; connected: boolean; volatile: { emit: (event: string, ...args: any[]) => void }; on: (event: string, handler: (...args: any[]) => void) => void; emit: (event: string, ...args: any[]) => void; disconnect: () => void };
 declare global { interface Window { io?: () => Socket } }
 export async function connectOnline(onRoom: (room: Room) => void, onInput: (input: any) => void, onSnapshot: (state: any) => void, onLost: () => void) {
   if (!window.io) await new Promise<void>((resolve, reject) => {

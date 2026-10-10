@@ -1,5 +1,6 @@
 import { levels, type Platform } from './levels.js';
 import { connectOnline, type Room } from './online.js';
+import { SnapshotBuffer } from './snapshots.js';
 let online = false, room: Room | null = null, onlineSlots: number[] = [];
 let socket: Awaited<ReturnType<typeof connectOnline>> | undefined;
 const onlineKeys = Array.from({length:4}, () => new Set<string>());
@@ -30,8 +31,8 @@ selectedColors.forEach((index,i)=>{
   };
   applyColor();select.addEventListener('change',()=>{applyColor();keys.clear();canvas.focus();if(winner>=0)showWinner();render();});
 });
-type Ball = { x: number; y: number; vx: number; vy: number; grounded: boolean; grace: number; falling: number; resting: boolean; recallClear: { x: number; y: number } | null; progress: {x:number;y:number;distance:number} | null; visited: {x:number;y:number}[]; settle: number; trail: { x: number; y: number }[] };
-type Player = { x: number; y: number; vx: number; vy: number; grounded: boolean; jumps: number; wall: number; coyote: number; facing: number; set: boolean; charging: boolean; power: number; angle: number; tumble: boolean; recovery: number; rotation: number; flip: number; flipDirection: number; anim: number; swing: number; strokes: number; falling: number; magnetHold: number; magnetActive: boolean; magnetUsed: boolean; magnetSpeed: number; ball: Ball };
+type Ball = { revision?: number; x: number; y: number; vx: number; vy: number; grounded: boolean; grace: number; falling: number; resting: boolean; recallClear: { x: number; y: number } | null; progress: {x:number;y:number;distance:number} | null; visited: {x:number;y:number}[]; settle: number; trail: { x: number; y: number }[] };
+type Player = { revision?: number; x: number; y: number; vx: number; vy: number; grounded: boolean; jumps: number; wall: number; coyote: number; facing: number; set: boolean; charging: boolean; power: number; angle: number; tumble: boolean; recovery: number; rotation: number; flip: number; flipDirection: number; anim: number; swing: number; strokes: number; falling: number; magnetHold: number; magnetActive: boolean; magnetUsed: boolean; magnetSpeed: number; ball: Ball };
 type Particle = { x: number; y: number; vx: number; vy: number; life: number; max: number; color: string; size: number };
 let levelIndex = 0;
 let platforms = levels[0].platforms, hole = levels[0].hole;
@@ -44,8 +45,21 @@ const keys = new Set<string>();
 let players: Player[] = [], particles: Particle[] = [], started = false, winner = -1, paused = false;
 let time = 0, last = 0, accumulator = 0, sound = false, audio: AudioContext | undefined;
 let hintTimer = 0;
+type GameSnapshot = { epoch:number; seq:number; sentAt:number; generation:number; players:Player[]; levelIndex:number; scores:number[]; results:(number|null)[]; winner:number; time:number; acknowledged:number[] };
+const snapshots = new SnapshotBuffer<Player, GameSnapshot>();
+let generation = 0, snapshotSeq = 0, nextSnapshotAt = 0, displayedSeq = -1;
+let inputSeq = 0, receivedGeneration = -1;
+const acknowledged = [0,0,0,0];
+const localHeld = new Set<string>();
+let feedback = {seq:0, x:0, y:0, targetX:0, targetY:0, until:0};
+let localAim = {x:640,y:200}, localChargeAt = 0;
+function clearNetworkPresentation() {
+  snapshots.clear(); displayedSeq=-1; receivedGeneration=-1; localHeld.clear(); localChargeAt=0;
+  feedback={seq:0,x:0,y:0,targetX:0,targetY:0,until:0}; acknowledged.fill(0); nextSnapshotAt=0;
+}
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
 function reset(play = true) {
+  if (online) { generation++; clearNetworkPresentation(); }
   const { x: sx, y: sy } = levels[levelIndex].start;
   players = Array.from({length:online ? onlineSlots.length : 2}, (_,i)=>sx+i*65).map((x, i) => ({ x, y: sy - 24, vx: 0, vy: 0, grounded: true, jumps: 0, wall: 0, coyote: .1, facing: 1, set: false, charging: false, power: 0, angle: Math.PI / 4, tumble: false, recovery: 0, rotation: 0, flip: 0, flipDirection: 1, anim: 0, swing: 0, strokes: 0, falling: 0, magnetHold: 0, magnetActive: false, magnetUsed: false, magnetSpeed: 0,
     ball: { x: x + 28, y: sy - 9, vx: 0, vy: 0, grounded: true, grace: 0, falling: 0, resting: true, recallClear: null, progress:null, visited:[], settle: 0, trail: [] } }));
@@ -65,6 +79,7 @@ function loadLevel(index: number) {
 }
 function newMatch() { if (!canManage()) return; scores.fill(0); results.fill(null); loadLevel(0); }
 function respawnPlayer(p: Player, i: number) {
+  p.revision = (p.revision ?? 0) + 1;
   releaseMagnet(p);
   const start = levels[levelIndex].start;
   Object.assign(p, { x: start.x + i * 65, y: start.y - 24, vx: 0, vy: 0, grounded: true,
@@ -72,6 +87,7 @@ function respawnPlayer(p: Player, i: number) {
     tumble: false, recovery: 0, rotation: 0, flip: 0, falling: 0, magnetHold: 0, magnetActive: false, magnetSpeed: 0 });
 }
 function respawnBall(b: Ball, i: number) {
+  b.revision = (b.revision ?? 0) + 1;
   const start = levels[levelIndex].start;
   Object.assign(b, { x: start.x + i * 65 + 28, y: start.y - 9, vx: 0, vy: 0,
     grounded: true, grace: .2, falling: 0, resting: true, settle: 0, trail: [] });
@@ -709,7 +725,7 @@ function drawBall(b: Ball, i: number) {
   ellipse(b.x, b.y + 8, 10, 3, '#243d322b'); ellipse(b.x, b.y, 9, 9, '#2d4438'); ellipse(b.x, b.y - 1, 7.5, 7.5, colors[i]);
   rect(b.x - 4, b.y - 5, 3, 3, '#fff7dc'); rect(b.x + 2, b.y - 2, 2, 2, palette[selectedColors[i]].dark); rect(b.x - 2, b.y + 3, 2, 2, palette[selectedColors[i]].dark);
 }
-function render() {
+function render(renderPlayers = players) {
   ctx.clearRect(0, 0, W, H); background();
   levels[levelIndex].hazards.forEach(h => {
     rect(h.x, h.y, h.w, h.h, h.kind === 'water' ? '#428aa9' : '#302943');
@@ -723,9 +739,9 @@ function render() {
   platforms.forEach(drawPlatform);
   const start = levels[levelIndex].start;
   roundRect(start.x - 12, start.y - 2, 150, 5, 2, '#dbe3a6');
-  drawHole(); players.forEach(drawAim);
-  players.forEach((p, i) => { ctx.globalAlpha = p.falling ? Math.max(.15, p.falling) : 1; drawPlayer(p, i); ctx.globalAlpha = 1; });
-  players.forEach((p, i) => {
+  drawHole(); renderPlayers.forEach(drawAim);
+  renderPlayers.forEach((p, i) => { ctx.globalAlpha = p.falling ? Math.max(.15, p.falling) : 1; drawPlayer(p, i); ctx.globalAlpha = 1; });
+  renderPlayers.forEach((p, i) => {
     if (winner !== i) { ctx.save(); drawBall(p.ball, i); ctx.globalAlpha = 1;
       if (p.ball.falling) { ctx.strokeStyle = colors[i]; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(p.ball.x, p.ball.y, 13 + (1 - p.ball.falling) * 10, 0, Math.PI * 2); ctx.stroke(); }
       ctx.restore(); }
@@ -736,13 +752,39 @@ function render() {
 function frame(now: number) {
   const elapsed = last ? Math.min((now - last) / 1000, .06) : 0; last = now;
   if (!paused) { accumulator += elapsed; while (accumulator >= STEP) { update(STEP); accumulator -= STEP; } }
-  render(); requestAnimationFrame(frame);
+  let presented = players;
+  if (online && !isHost() && room?.phase==='playing') {
+    const state=snapshots.sample(elapsed*1000);
+    if(state) { applySnapshot(state); presented=presentLocalFeedback(state, elapsed); }
+  }
+  if (online && isHost() && room?.phase==='playing' && socket?.connected && now>=nextSnapshotAt) {
+    // One send after physics, at most once per frame. Never catch up with packet bursts.
+    nextSnapshotAt+=40;
+    if(nextSnapshotAt<=now)nextSnapshotAt=now+40;
+    socket.volatile.emit('snapshot',{epoch:room.epoch,seq:++snapshotSeq,sentAt:now,generation,players,levelIndex,scores,results,winner,time,acknowledged});
+  }
+  render(presented); requestAnimationFrame(frame);
 }
 reset(false); requestAnimationFrame(frame);
 
 // Online adapters use the existing simulation and renderer. Only the room host steps physics.
 function sendInput(action:string, down?:boolean, x?:number, y?:number) {
-  if (online && room?.phase==='playing' && socket?.connected) socket.emit('input', {epoch:room.epoch,action,down,x,y});
+  if (!online || room?.phase!=='playing' || !socket?.connected) return;
+  const slot=room.players.find(p=>p?.id===socket!.id)?.slot;
+  if(slot===undefined)return;
+  const data={epoch:room.epoch,seq:++inputSeq,action,down,x,y};
+  if(isHost()) { receiveInput({...data,slot}); return; }
+  if(action==='clear') { localHeld.clear(); localChargeAt=0; feedback.until=0; }
+  else if(action==='aim') localAim={x:x!,y:y!};
+  else {
+    if(down)localHeld.add(action);else localHeld.delete(action);
+    if(action==='swing')localChargeAt=down?performance.now():0;
+    if(down && (action==='left'||action==='right'||action==='jump')) {
+      // Bounded visual anticipation only; host still owns movement and collisions.
+      feedback={seq:inputSeq,x:feedback.x,y:feedback.y,targetX:action==='left'?-12:action==='right'?12:0,targetY:action==='jump'?-8:0,until:performance.now()+200};
+    }
+  }
+  socket.emit('input',data);
 }
 function aimPlayer(i:number) {
   const p=players[i], aim=aims[i], dx=aim.x-p.ball.x, dy=aim.y-p.ball.y;
@@ -751,6 +793,7 @@ function aimPlayer(i:number) {
 function receiveInput(data:any) {
   if (!isHost() || room?.phase!=='playing' || data.epoch!==room.epoch) return;
   const i=onlineSlots.indexOf(data.slot), p=players[i]; if (!p) return;
+  acknowledged[data.slot]=Math.max(acknowledged[data.slot],data.seq || 0);
   const held=onlineKeys[i];
   if (data.action==='clear') { held.clear(); p.charging=false; p.power=0; releaseMagnet(p); return; }
   if (data.action==='aim') { aims[i]={x:data.x,y:data.y}; if(p.set)aimPlayer(i); return; }
@@ -779,20 +822,53 @@ let lastAim=0;
 canvas.addEventListener('mousemove',e=>{if(performance.now()-lastAim>33){pointerAim(e);lastAim=performance.now();}});
 canvas.addEventListener('mousedown',e=>{if(online && e.button===0){e.preventDefault();canvas.focus();pointerAim(e);sendInput('swing',true);}});
 window.addEventListener('mouseup',e=>{if(online && e.button===0){pointerAim(e);sendInput('swing',false);}});
-function receiveSnapshot(state:any) {
+function receiveSnapshot(state:GameSnapshot) {
   if (!online || isHost() || room?.phase!=='playing' || state.epoch!==room.epoch) return;
+  if(snapshots.push(state,performance.now()) && receivedGeneration!==state.generation) {
+    if(receivedGeneration!==-1) {
+      localHeld.clear();localChargeAt=0;
+      feedback={seq:0,x:0,y:0,targetX:0,targetY:0,until:0};
+    }
+    receivedGeneration=state.generation;
+  }
+}
+function applySnapshot(state:GameSnapshot) {
   levelIndex=state.levelIndex; platforms=levels[levelIndex].platforms;hole=levels[levelIndex].hole;
-  players=state.players; scores.splice(0,scores.length,...state.scores);results.splice(0,results.length,...state.results);
-  winner=state.winner;time=state.time;started=true;paused=false;
+  players=state.players; started=true;paused=false;
+  if(displayedSeq===state.seq)return;
+  displayedSeq=state.seq;
+  scores.splice(0,scores.length,...state.scores);results.splice(0,results.length,...state.results);
+  winner=state.winner;
   $('again').textContent='WAITING FOR HOST';
   levelSelect.value=String(levelIndex);$('course-name').textContent=`HOLE ${levelIndex+1} / 10`;
   $('win').classList.toggle('hidden',winner<0);if(winner>=0)showWinner();updateHUD();
 }
-setInterval(()=>{
-  if(online && isHost() && room?.phase==='playing') socket?.emit('snapshot',{epoch:room.epoch,players,levelIndex,scores,results,winner,time});
-}, 1000/30);
+function presentLocalFeedback(state:GameSnapshot, dt:number):Player[] {
+  const slot=room?.players.find(p=>p?.id===socket?.id)?.slot;
+  const i=onlineSlots.indexOf(slot ?? -1), p=state.players[i];
+  if(!p)return state.players;
+  const rendered=state.players.slice(), own={...p,ball:{...p.ball}};
+  const pending=(state.acknowledged[slot!] || 0)<feedback.seq && performance.now()<feedback.until;
+  const anticipate=pending && !own.falling && !own.tumble && winner<0;
+  const blend=1-Math.exp(-dt*25);
+  feedback.x+=((anticipate?feedback.targetX:0)-feedback.x)*blend;
+  feedback.y+=((anticipate?feedback.targetY:0)-feedback.y)*blend;
+  // Do not anticipate through a wall or while aiming; no ball prediction.
+  if(!own.set && !own.tumble && !own.falling && winner<0) {
+    const x=clamp(own.x+feedback.x,14,W-14), y=own.y+feedback.y;
+    if(!platforms.some(s=>roundedContact(x,y,13,s))) {own.x=x;own.y=y;}
+    const direction=Number(localHeld.has('right'))-Number(localHeld.has('left'));
+    if(direction)own.facing=direction;
+  }
+  if(localChargeAt && winner<0 && !own.tumble && !own.falling && !own.ball.falling && Math.hypot(own.x-own.ball.x,own.y-(own.ball.y-16))<92 && Math.hypot(own.ball.vx,own.ball.vy)<75) {
+    own.set=true;own.charging=true;own.power=Math.min(1,(performance.now()-localChargeAt)/1000*.66);
+  }
+  if(own.set) { const dx=localAim.x-own.ball.x;own.facing=dx<0?-1:1;own.angle=Math.atan2(own.ball.y-localAim.y,Math.abs(dx)); }
+  rendered[i]=own;return rendered;
+}
 function receiveRoom(next:Room) {
   const start=next.phase==='playing' && (room?.phase!=='playing' || room.epoch!==next.epoch);
+  if(room?.epoch!==next.epoch || next.phase==='lobby')clearNetworkPresentation();
   room=next;
   $('room-actions').classList.add('hidden');$('lobby').classList.remove('hidden');
   $('lobby-code').textContent=`ROOM ${room.code}`;
@@ -810,7 +886,7 @@ function receiveRoom(next:Room) {
     reset();canvas.focus();
   }
 }
-function lostConnection(){room=null;started=false;onlineKeys.forEach(k=>k.clear());$('online-menu').classList.remove('hidden');$('room-actions').classList.remove('hidden');$('lobby').classList.add('hidden');$('win').classList.add('hidden');$('online-score').classList.add('hidden');}
+function lostConnection(){clearNetworkPresentation();room=null;started=false;onlineKeys.forEach(k=>k.clear());$('online-menu').classList.remove('hidden');$('room-actions').classList.remove('hidden');$('lobby').classList.add('hidden');$('win').classList.add('hidden');$('online-score').classList.add('hidden');}
 let pending=false;
 function requestRoom(event:string,data:unknown=null){
   if(pending)return;
@@ -819,16 +895,31 @@ function requestRoom(event:string,data:unknown=null){
   const timer=setTimeout(()=>{pending=false;$('online-status').textContent='Request timed out. Reconnect and try again.';},5000);
   socket.emit(event,data,(reply:{error?:string})=>{clearTimeout(timer);pending=false;$('online-status').textContent=reply.error || 'Ready. Share the room code with friends.';});
 }
+let connectionAttempt=0;
 $('play-online').addEventListener('click',async()=>{
+  if(online)return;
+  const attempt=++connectionAttempt;
   online=true;started=false;keys.clear();document.body.classList.add('online');$('start').classList.add('hidden');$('online-menu').classList.remove('hidden');$('help-panel').classList.add('hidden');$('leave-online').classList.remove('hidden');
   ['level-select','new-match','restart','again'].forEach(id=>($(id) as HTMLButtonElement).disabled=true);
   $('online-status').textContent='Connecting…';
-  try{const connected=await connectOnline(receiveRoom,receiveInput,receiveSnapshot,lostConnection);if(!online){connected.disconnect();return;}socket=connected;}catch(error){$('online-status').textContent=(error as Error).message;}
+  try {
+    const connected=await connectOnline(
+      next=>{if(attempt===connectionAttempt)receiveRoom(next);},
+      input=>{if(attempt===connectionAttempt)receiveInput(input);},
+      state=>{if(attempt===connectionAttempt)receiveSnapshot(state);},
+      ()=>{if(attempt===connectionAttempt)lostConnection();},
+    );
+    if(!online || attempt!==connectionAttempt){connected.disconnect();return;}
+    socket=connected;
+  } catch(error) {
+    if(attempt===connectionAttempt)$('online-status').textContent=(error as Error).message;
+  }
 });
 $('create-room').addEventListener('click',()=>requestRoom('create-room'));
 $('join-room').addEventListener('click',()=>requestRoom('join-room',($('room-code') as HTMLInputElement).value));
 $('start-game').addEventListener('click',()=>requestRoom('start-game'));
 function leaveOnline(){
+  connectionAttempt++;clearNetworkPresentation();
   socket?.disconnect();socket=undefined;room=null;online=false;pending=false;document.body.classList.remove('online');
   ['online-menu','online-score','online-help','leave-online'].forEach(id=>$(id).classList.add('hidden'));
   ['level-select','new-match','restart','again'].forEach(id=>($(id) as HTMLButtonElement).disabled=false);

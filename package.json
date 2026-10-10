@@ -9,7 +9,8 @@
     "check": "tsc --noEmit",
     "test": "node tests/smoke.mjs",
     "test:rooms": "node tests/rooms.mjs",
-    "test:online": "node tests/online.mjs"
+    "test:online": "node tests/online.mjs",
+    "test:snapshots": "node tests/snapshots.mjs"
   },
   "devDependencies": {
     "typescript": "^5.9.3"
