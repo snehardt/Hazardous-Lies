@@ -36,6 +36,11 @@ jobs:
         run: pnpm install --frozen-lockfile
       - name: Build game
         run: pnpm build
+      - name: Check multiplayer protocol and synchronization
+        run: |
+          pnpm test:rooms
+          pnpm test:snapshots
+          pnpm test:prediction
       - name: Prepare public files
         run: |
           mkdir _site

@@ -1,8 +1,6 @@
 import http from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { resolve, extname, sep } from 'node:path';
-import { Server } from 'socket.io';
-import { attachRooms } from './rooms.mjs';
 const root = resolve('.');
 const types = { '.html': 'text/html', '.css': 'text/css', '.js': 'text/javascript', '.png': 'image/png', '.ttf': 'font/ttf' };
 const server = http.createServer(async (req, res) => {
@@ -16,6 +14,5 @@ const server = http.createServer(async (req, res) => {
     res.end(data);
   } catch { res.writeHead(404).end('Not found. Run npm run build first.'); }
 });
-attachRooms(new Server(server, { maxHttpBufferSize: 250000 }));
 const port = Number(process.env.PORT || 5173), host = process.env.HOST || '0.0.0.0';
 server.listen(port, host, () => console.log(`Hazardous Lies → http://localhost:${port} (listening on ${host}:${port})`));

@@ -3,10 +3,10 @@ import { connectOnline, type Room } from './online.js';
 import { SnapshotBuffer } from './snapshots.js';
 import { MovementPrediction, MovementQueue, MOVEMENT_STEP, type MoveCommand } from './prediction.js';
 let online = false, room: Room | null = null, onlineSlots: number[] = [];
-let socket: Awaited<ReturnType<typeof connectOnline>> | undefined;
+let session: Awaited<ReturnType<typeof connectOnline>> | undefined;
 const onlineKeys = Array.from({length:4}, () => new Set<string>());
 const aims = Array.from({length:4}, () => ({x:640,y:200}));
-const isHost = () => !!room && socket?.id === room.host;
+const isHost = () => !!room && session?.id === room.host;
 const canManage = () => !online || (isHost() && room?.phase==='playing');
 const inputKeys = (i:number) => online ? onlineKeys[i] : keys;
 const inputControls = (i:number) => online ? controls[0] : controls[i];
@@ -68,7 +68,7 @@ let correction={x:0,y:0};
 let latestState:GameSnapshot|undefined;
 const movementQueues=Array.from({length:4},()=>new MovementQueue());
 const prediction=new MovementPrediction<Player>(p=>({...p,ball:{...p.ball}}),(p,c)=>{
-  const slot=room?.players.find(member=>member?.id===socket?.id)?.slot;
+  const slot=room?.players.find(member=>member?.id===session?.id)?.slot;
   const i=onlineSlots.indexOf(slot ?? -1);
   predicting=true;
   try { stepMovement(p,c,i); } finally { predicting=false;predictionKeys=undefined; }
@@ -581,7 +581,7 @@ function showWinner() {
 }
 function updateHUD() {
   if (online) {
-    $('online-score').replaceChildren(...players.map((p,i)=>{ const el=document.createElement('span'); el.style.borderColor=colors[i]; el.textContent=`P${onlineSlots[i]+1}${room?.players[onlineSlots[i]]?.id===socket?.id ? " (YOU)" : ""} · ${scores[i]} POINTS · ${p.strokes} SHOTS`; return el; })); return;
+    $('online-score').replaceChildren(...players.map((p,i)=>{ const el=document.createElement('span'); el.style.borderColor=colors[i]; el.textContent=`P${onlineSlots[i]+1}${room?.players[onlineSlots[i]]?.id===session?.id ? " (YOU)" : ""} · ${scores[i]} POINTS · ${p.strokes} SHOTS`; return el; })); return;
   }
   players.forEach((p, i) => {
     $(`p${i + 1}-score`).textContent = `${scores[i]} POINT${scores[i] === 1 ? '' : 'S'}`;
@@ -592,7 +592,7 @@ function update(dt: number) {
   time += dt;
   if (started && winner < 0 && !paused && (!online || isHost())) {
     players.forEach((p, i) => {
-      if(online && room?.players[onlineSlots[i]]?.id!==socket?.id) {
+      if(online && room?.players[onlineSlots[i]]?.id!==session?.id) {
         movementQueues[onlineSlots[i]].advance(dt,command=>stepMovement(p,command,i),()=>stepMovement(p,{tick:0,left:false,right:false,jump:false},i));
       } else movePlayer(p,dt,i);
     });
@@ -791,11 +791,11 @@ function frame(now: number) {
     const state=snapshots.sample(elapsed*1000);
     if(state) { applySnapshot(state); presented=presentPredictedPlayer(state, elapsed); }
   }
-  if (online && isHost() && room?.phase==='playing' && socket?.connected && now>=nextSnapshotAt) {
+  if (online && isHost() && room?.phase==='playing' && session?.connected && now>=nextSnapshotAt) {
     // One send after physics, at most once per frame. Never catch up with packet bursts.
     nextSnapshotAt+=40;
     if(nextSnapshotAt<=now)nextSnapshotAt=now+40;
-    socket.volatile.emit('snapshot',{epoch:room.epoch,seq:++snapshotSeq,sentAt:now,generation,players,levelIndex,scores,results,winner,time,acknowledged,movementAck:movementQueues.map(q=>q.acknowledged)});
+    session.sendSnapshot({epoch:room.epoch,seq:++snapshotSeq,sentAt:now,generation,players,levelIndex,scores,results,winner,time,acknowledged,movementAck:movementQueues.map(q=>q.acknowledged)});
   }
   render(presented); requestAnimationFrame(frame);
 }
@@ -803,8 +803,8 @@ reset(false); requestAnimationFrame(frame);
 
 // Online adapters use the existing simulation and renderer. Only the room host steps physics.
 function sendInput(action:string, down?:boolean, x?:number, y?:number) {
-  if (!online || room?.phase!=='playing' || !socket?.connected) return;
-  const slot=room.players.find(p=>p?.id===socket!.id)?.slot;
+  if (!online || room?.phase!=='playing' || !session?.connected) return;
+  const slot=room.players.find(p=>p?.id===session!.id)?.slot;
   if(slot===undefined)return;
   const data={epoch:room.epoch,seq:++inputSeq,action,down,x,y};
   if(isHost()) { receiveInput({...data,slot}); return; }
@@ -818,7 +818,7 @@ function sendInput(action:string, down?:boolean, x?:number, y?:number) {
 
   }
   if(['left','right','jump'].includes(action))return;
-  socket.emit('input',{...data,generation:receivedGeneration});
+  session.sendInput({...data,generation:receivedGeneration});
 }
 function aimPlayer(i:number,p=players[i]) {
   const aim=predicting?localAim:aims[i], dx=aim.x-p.ball.x, dy=aim.y-p.ball.y;
@@ -884,7 +884,7 @@ function applySnapshot(state:GameSnapshot) {
   $('win').classList.toggle('hidden',winner<0);if(winner>=0)showWinner();updateHUD();
 }
 function presentPredictedPlayer(state:GameSnapshot,dt:number):Player[] {
-  const slot=room?.players.find(member=>member?.id===socket?.id)?.slot;
+  const slot=room?.players.find(member=>member?.id===session?.id)?.slot;
   const i=onlineSlots.indexOf(slot ?? -1);
   if(i<0 || !latestState || latestState.generation!==state.generation)return state.players;
   const authority=latestState.players[i];
@@ -905,7 +905,7 @@ function presentPredictedPlayer(state:GameSnapshot,dt:number):Player[] {
     predictionAccumulator-=STEP;
   }
   const frames=prediction.drain();
-  if(frames.length && socket?.connected)socket.emit('input',{epoch:room!.epoch,generation:state.generation,action:'movement',frames});
+  if(frames.length && session?.connected)session.sendInput({epoch:room!.epoch,generation:state.generation,action:'movement',frames});
   const rendered=state.players.slice(),own={...prediction.pose!,ball:state.players[i].ball};
   const decay=Math.exp(-dt*18);correction.x*=decay;correction.y*=decay;
   // Never ease a correction through terrain. Hard corrections are preferable to wall clipping.
@@ -940,9 +940,9 @@ function receiveRoom(next:Room) {
   room=next;
   $('room-actions').classList.add('hidden');$('lobby').classList.remove('hidden');
   $('lobby-code').textContent=`ROOM ${room.code}`;
-  $('your-player').textContent=`YOU ARE PLAYER ${room.players.find(p=>p?.id===socket?.id)!.slot+1}${isHost()?' · HOST':''}`;
-  $('lobby-players').replaceChildren(...room.players.map((p,i)=>{const el=document.createElement('div');el.textContent=`Player ${i+1} - ${p?'Connected':'Waiting...'}${p?.id===room!.host?' (Host)':''}`;return el;}));
-  ($('start-game') as HTMLButtonElement).disabled=!isHost() || room.players.filter(Boolean).length<2;
+  $('your-player').textContent=`YOU ARE PLAYER ${room.players.find(p=>p?.id===session?.id)!.slot+1}${isHost()?' · HOST':''}`;
+  $('lobby-players').replaceChildren(...room.players.map((p,i)=>{const el=document.createElement('div');el.textContent=`Player ${i+1} - ${p?(p.ready===false?'Connecting…':'Connected'):'Waiting...'}${p?.id===room!.host?' (Host)':''}`;return el;}));
+  ($('start-game') as HTMLButtonElement).disabled=!isHost() || room.players.filter(Boolean).length<2 || room.players.some(p=>p?.ready===false);
   ['level-select','new-match','restart','again'].forEach(id=>($(id) as HTMLButtonElement).disabled=!canManage());
   $('online-menu').classList.toggle('hidden',room.phase==='playing');
   $('online-score').classList.toggle('hidden',room.phase!=='playing');
@@ -958,10 +958,10 @@ function lostConnection(){clearNetworkPresentation();room=null;started=false;onl
 let pending=false;
 function requestRoom(event:string,data:unknown=null){
   if(pending)return;
-  if(!socket?.connected){$('online-status').textContent='Not connected yet. Check that the Node server is running.';return;}
-  pending=true; $('online-status').textContent='Waiting for server…';
-  const timer=setTimeout(()=>{pending=false;$('online-status').textContent='Request timed out. Reconnect and try again.';},5000);
-  socket.emit(event,data,(reply:{error?:string})=>{clearTimeout(timer);pending=false;$('online-status').textContent=reply.error || 'Ready. Share the room code with friends.';});
+  if(!session?.connected){$('online-status').textContent='Connecting to PeerJS signaling. Wait for Connected before creating or joining a room.';return;}
+  pending=true; $('online-status').textContent='Connecting peers…';
+  const timer=setTimeout(()=>{pending=false;$('online-status').textContent='Connection timed out. Check the room code and network.';},15000);
+  session.request(event,data,(reply:{error?:string})=>{clearTimeout(timer);pending=false;$('online-status').textContent=reply.error || 'Ready. Share the room code with friends.';});
 }
 let connectionAttempt=0;
 $('play-online').addEventListener('click',async()=>{
@@ -978,7 +978,7 @@ $('play-online').addEventListener('click',async()=>{
       ()=>{if(attempt===connectionAttempt)lostConnection();},
     );
     if(!online || attempt!==connectionAttempt){connected.disconnect();return;}
-    socket=connected;
+    session=connected;
   } catch(error) {
     if(attempt===connectionAttempt)$('online-status').textContent=(error as Error).message;
   }
@@ -988,7 +988,7 @@ $('join-room').addEventListener('click',()=>requestRoom('join-room',($('room-cod
 $('start-game').addEventListener('click',()=>requestRoom('start-game'));
 function leaveOnline(){
   connectionAttempt++;clearNetworkPresentation();
-  socket?.disconnect();socket=undefined;room=null;online=false;pending=false;document.body.classList.remove('online');
+  session?.disconnect();session=undefined;room=null;online=false;pending=false;document.body.classList.remove('online');
   ['online-menu','online-score','online-help','leave-online'].forEach(id=>$(id).classList.add('hidden'));
   ['level-select','new-match','restart','again'].forEach(id=>($(id) as HTMLButtonElement).disabled=false);
   selectedColors.splice(0,selectedColors.length,...[1,2].map(i=>Number(($(`p${i}-color`) as HTMLSelectElement).value)));

@@ -4,7 +4,7 @@ A golf platformer with two-player same-keyboard local play and 2–4 player onli
 
 ## Run
 
-Static local-play version: [Hazardous Lies](https://snehardt.github.io/Hazardous-Lies/).
+Play local or online: [Hazardous Lies](https://snehardt.github.io/Hazardous-Lies/).
 
 GitHub Pages builds and publishes the game automatically when changes are pushed to `main`. Both players share one keyboard on the computer opening the link.
 
@@ -77,52 +77,48 @@ Separate tower checks verify all three intended shelf lifts and their clearances
 
 
 
-## Online multiplayer (Node.js + Socket.IO)
+## Online multiplayer (PeerJS + WebRTC)
 
-The opening menu offers **Play Local** (the original controls) and **Play Online**.
-Run the Node server on one computer:
+Play at **[Hazardous Lies on GitHub Pages](https://snehardt.github.io/Hazardous-Lies/)**. Both local and online play work on this static site. No Render service, Socket.IO relay, or locally running Node server is needed to play.
 
-```sh
-pnpm install
-pnpm run build
-pnpm run dev
-```
+1. Both players open the link and choose **Play Online**.
+2. Wait for **Connected**, then one player chooses **Create Room**.
+3. Share the **six-character room code** with up to three guests.
+4. Guests enter that code and choose **Join Room**. The host can start once all game channels are ready.
 
-npm install / npm run build / npm run dev work too. The server listens on **0.0.0.0:5173** by default. Open http://localhost:5173 on that computer. On another computer on the same network, open **http://SERVER_LAN_IP:5173** (find the host's IPv4 address with ipconfig). Allow Node through the host firewall for your private network if prompted. Both browsers must open the same Node server. A room code identifies a room on that server; it is not a server address.
+Every online client controls only its assigned golfer: **A/D** move, **W** jump/double jump/wall jump, **S** recalls. Aim with the mouse; hold left click to charge and release to swing near your own slow/stationary ball. The host selects arenas, restarts, and advances levels. Local multiplayer controls, ball physics and level layouts are unchanged.
 
-Use Play Online → Create Room; share the four-character code; other clients choose Join Room. The lobby shows all four numbered slots. Only the host can start, and at least two players are required. During a match, joins are rejected. A client leaving or losing its connection returns the remaining players to the lobby and frees its slot. The next start begins a new match. If the host leaves, the lowest occupied slot becomes host. Empty rooms are deleted. Reconnected clients must explicitly rejoin; disconnected slots are not reserved.
+### Connections and hosting
 
-Every online client controls only its assigned player: **A/D** move, **W** jump/double jump/wall jump, **S** recalls. Aim with the mouse; **hold left click to charge and release to swing** near your own slow/stationary ball. A short click produces a minimum-power swing. The cursor is converted from CSS-scaled canvas coordinates into the 1280×640 game world; the direction originates at your ball. Keyboard angle adjustment is disabled online. Existing shot power, terrain, collisions, ball physics, recall and knockback functions are reused. The host controls arena selection, restart and next level. Local color choices are restored when leaving online mode; online colors follow player slots.
+PeerJS Cloud provides signaling to introduce browsers. Gameplay travels on WebRTC data channels between guests and the host. The app uses a reliable ordered control/input channel and a separate unordered binary snapshot channel, with send-buffer backpressure and snapshot sequence filtering. Binary chunking supports long recall histories. PeerJS's unordered option does not disable retransmissions; this is not a custom unreliable UDP protocol.
 
-### Architecture and assignment request flow
+The host owns the four-player lobby, assigns slots from channel identities, validates/rate-limits guest input, and runs authoritative world physics. Guests cannot choose another player's slot or publish authoritative snapshots. Room codes are cryptographically random and protocol-namespaced; initial ID collisions retry with another code. Codes are invitations, not accounts or passwords.
 
-- Node's HTTP server listens on an IP/port and serves the game plus Socket.IO.
-- Clients send create-room, join-room, start-game and leave-room requests. The server validates membership, capacity and host privileges, responds with acknowledgements/errors, and broadcasts lobby state.
-- The server generates unique codes using cryptographic random selection, excluding 0/O and 1/I. Rooms exist only in memory.
-- Clients send input requests. The server assigns their identity from the socket's room slot, validates actions, limits input rate and forwards them only to the host.
-- **The host browser simulates the match**, using the same existing 120 Hz physics and rendering code as local play. All player/ball pairs participate in the existing collision rule. The host sends snapshots on a 40 ms schedule (about 25 Hz), after physics in the existing animation loop, without catch-up bursts. The server accepts snapshots only from that room's host and forwards them only to that room. Snapshots use volatile Socket.IO delivery so congestion cannot queue obsolete game states; input remains reliable. Guests buffer roughly 100 ms of host-timestamped snapshots and interpolate remote players, balls and continuous animation fields every render frame. Their own golfer uses immediate local movement prediction with the same 120 Hz movement/collision code. No guest simulates balls, other players, scoring or world outcomes.
-- Each start/disconnect changes a server-owned match epoch, rejecting packets from the previous match. Disconnect handling removes membership, transfers hosting, notifies peers, frees slots, and deletes empty rooms without stopping the server.
+A guest leaving returns everyone else to the lobby and frees that slot. The host starts a new match after any replacements join. **If the host leaves, the room ends** and guests can create or join another room. There is no automatic host migration. Connection timeouts and heartbeat cleanup handle broken peers, and leaving closes channels, signaling and timers. The host must keep the game tab visible; background browser throttling can still affect gameplay.
 
-This is a server-mediated, host-simulated architecture, not cheat-resistant server-side physics. The host must keep the game tab open and visible: browsers throttle background tabs. Host input is applied immediately without a server round trip. Guests predict their own movement and jumps immediately and send ordered movement commands in reliable batches, with fixed 1/120-second steps. The host bounds processing by elapsed simulation time, acknowledges the last consumed command in each snapshot, and remains authoritative for all outcomes. Guests reconcile against the newest snapshot and replay only unacknowledged commands. Small corrections ease out only when the full player hull and correction path are clear of terrain; respawns and large corrections snap. Prediction and input history are bounded during outages. After a long input stall, the host applies neutral movement so a background client cannot leave its golfer suspended indefinitely. Mouse aim and charging retain immediate visual feedback. Sequence numbers reject stale/duplicate snapshots; match epochs, restart generations and individual respawn revisions prevent blending across resets. After packet starvation, presentation holds the latest pose instead of extrapolating through terrain. The server provides validation and room isolation but trusts the host's simulation. For play outside your LAN, run this same Node service on a reachable server with HTTPS/WebSocket support; GitHub Pages alone cannot run it. No accounts, persistence, or automatic match-resume are implemented.
+WebRTC cannot connect directly through every firewall or NAT. The default configuration uses PeerJS Cloud/STUN and has no provisioned TURN relay. On restrictive school/work networks, joining may fail with a timeout; use another network or configure a TURN service. PeerJS Cloud is still an external dependency for initial connection establishment. See [PeerJS connection requirements](https://peerjs.com/client/faq).
 
-Override binding in PowerShell with `$env:PORT='5174'` and optionally `$env:HOST='0.0.0.0'` before running the server. Restart any older server process after updating this code. Builds must be rerun after TypeScript edits.
+For a custom signaling server or TURN setup, define `window.HAZARDOUS_PEER_OPTIONS` before loading the game module. It accepts PeerJS options (host/port/path/secure and config.iceServers). Obtain short-lived TURN credentials from your provider; do not publish permanent secrets in the static site. The test suite uses this option for an ephemeral local signaling server; production uses PeerJS Cloud by default.
 
-### Online validation
+### Movement and walls
 
-`pnpm run test:rooms` starts an ephemeral server and checks requests, invalid/full rooms, host-only starts, player identity, disconnect cleanup, host transfer and slot reuse. `pnpm run test:online` uses four separate browser sessions against a running server (default http://localhost:5173; override with TEST_URL). It checks the menu/lobby flow, ownership, double jump, scaled mouse aiming, swings, Player 4 wins, level synchronization, reconnect slot reuse and return to local. It also injects packet jitter/reordering and delayed input, checks that render movement has more steps than network updates, verifies the snapshot rate, immediate and continuous local movement without backwards reconciliation, and confirms that guests predict only their assigned player, run no ball physics, and packet callbacks never overwrite presentation. It also tests a wall under delayed input and jitter, checking both predicted and host positions. After building, `pnpm run test:snapshots` checks deterministic interpolation, immutable snapshots, packet ordering/loss, long-outage recovery, level/restart boundaries and independent respawns. `pnpm run test:prediction` tests command acknowledgement/replay, delayed packets, jump preservation, duplicates, host rate bounds and resets. It uses the same PLAYWRIGHT_PATH and BROWSER_CHANNEL settings as the existing campaign suite and saves lobby/game screenshots under artifacts/. `pnpm test` continues to run the original local campaign regression suite.
+The host sends timestamped snapshots about **25 times per second**. Remote players and balls are rendered from a roughly 100 ms interpolation buffer. The joining player's own movement is predicted immediately using the same 120 Hz movement and collision code, then reconciled against host acknowledgements by replaying only unacknowledged commands. Guests do not simulate balls, other players or scoring. Movement history and host time budgets are bounded.
 
-## Free public multiplayer hosting
+Small position corrections are eased only when the full player hull and correction path are clear. Respawns, restarts and level changes do not blend across the map. The wall crossing test also catches shallow overlaps left by corner landings. Movement speed, acceleration, gravity, jump strengths and ball physics are unchanged; intentional magnet recall still passes balls through terrain.
 
-The included `render.yaml` deploys the entire game and Socket.IO server together as one **Free** Render web service. Start at [Deploy to Render](https://render.com/deploy?repo=https://github.com/snehardt/Hazardous-Lies), sign in, and review the Blueprint. Keep the service on the Free plan. Once deployment succeeds, share the assigned `https://…onrender.com` URL with every player. That link supports both local and online modes; the GitHub Pages link remains local-only because it cannot run Node.js.
+### Development and deployment
 
-Render's free service sleeps after 15 minutes without incoming traffic and takes about a minute to wake. Rooms are held in memory and disappear on restart or redeploy. For no charges, do not add a payment method: Render's documentation says it suspends services when free allowances are exceeded without a payment method. See [free limits](https://render.com/docs/free) and [billing FAQ](https://render.com/docs/faq).
+`pnpm install`, `pnpm build`, and `pnpm dev` run a static development server at http://localhost:5173. The build type-checks TypeScript and bundles PeerJS with the game, so there is no browser library CDN dependency. GitHub Actions builds and publishes index.html, style.css, assets and dist to GitHub Pages on every push to main. Relative asset paths support the /Hazardous-Lies/ project URL.
 
-### Jitter diagnosis
+The former Render blueprint and Socket.IO room server have been removed from this repository. Removing configuration does not delete a previously created hosting account or service; an old deployment can be suspended separately.
 
-The original guest snapshot callback assigned `players = state.players` and reset animation time on every packet. Thus the host rendered 120 Hz physics at display refresh while guests held each pose until the next ~30 Hz packet; Render/network timing made those position jumps uneven. The host-only physics guard was already present, and there was one animation loop, one snapshot timer and one set of listeners per socket. No competing guest physics or per-packet game reset was found. The old snapshot timer was independent of the animation loop, and repeated online-entry calls could create extra sockets. Snapshot sending now shares the existing frame loop, and online-entry attempts are guarded against duplicate/stale connections. Render hosting and Socket.IO remain unchanged.
+### Validation
 
-### Movement prediction and wall regression fix
+- `pnpm check`: TypeScript.
+- `pnpm test:rooms`: room-code, identity, membership, epoch and input validation.
+- `pnpm test:snapshots`: interpolation, ordering, packet loss, resets and independent respawns.
+- `pnpm test:prediction`: acknowledgement/replay, delayed input, jump preservation, authority rate bounds and stalls.
+- `pnpm test:online`: real WebRTC channels across four browser sessions, with an automatically started local PeerJS signaling server. Covers room capacity, movement ownership, large chunked snapshots, injected jitter/input lag, walls, disconnect/rejoin, host departure and return to local play. Set PEER_PUBLIC=1 to use public PeerJS signaling instead.
+- `pnpm test`: the original local campaign suite, including 48 wall cases and 1,288 floor cases.
 
-The first interpolation pass also delayed the local golfer and added a small artificial movement offset. That offset could pull back as acknowledgements arrived and its small circular clearance test did not match the player collision hull. It has been replaced with command-based prediction and replay of only the assigned golfer. Prediction suppresses audio, particles and hints during replay. Remote interpolation refuses paths through terrain; balls still follow their intentional magnet-recall behavior.
-
-The old wall crossing test required the previous player edge to be almost perfectly outside a wall. A shallow overlap from a corner landing could bypass that test. It now checks which side the previous player center occupied and restores the same-side boundary. Movement speed, acceleration, gravity, jump strengths, ball physics and level layouts are unchanged. The local campaign tests additionally cover 48 wall cases spanning both sides, thin/thick walls, shallow overlaps and fast knockback, alongside the existing 1,288 floor cases.
+Build first and run the static development server for browser tests. Set TEST_URL to override http://localhost:5173. Install Playwright separately or set PLAYWRIGHT_PATH; BROWSER_CHANNEL=msedge uses installed Edge. Browser artifacts are written to artifacts/ and are not published.

@@ -1,41 +1,18 @@
 import assert from 'node:assert/strict';
-import http from 'node:http';
-import { Server } from 'socket.io';
-import { io } from 'socket.io-client';
-import { attachRooms } from '../rooms.mjs';
-const server = http.createServer(), sockets = new Server(server), rooms = attachRooms(sockets), clients = [];
-await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
-const once = (s, e) => new Promise(resolve => s.once(e, resolve));
-const request = (s, e, data = null) => s.timeout(2000).emitWithAck(e, data);
-async function client() { const s = io(`http://127.0.0.1:${server.address().port}`); clients.push(s); await once(s, 'connect'); return s; }
-try {
-  const a = await client(), b = await client(), c = await client(), d = await client(), e = await client();
-  let next = once(a, 'room'); assert.equal((await request(a, 'create-room')).ok, true);
-  let room = await next; const code = room.code; assert.match(code, /^[A-HJ-NP-Z2-9]{4}$/);
-  assert.match((await request(a, 'start-game')).error, /two/);
-  assert.match((await request(b, 'join-room', '0000')).error, /not found/);
-  for (const s of [b,c,d]) assert.equal((await request(s, 'join-room', code.toLowerCase())).ok, true);
-  assert.match((await request(e, 'join-room', code)).error, /full/);
-  assert.match((await request(b, 'start-game')).error, /host/);
-  next = once(a, 'room'); await request(a, 'start-game'); room = await next;
-  assert.equal(room.phase, 'playing'); assert.deepEqual(room.players.map(p => p.slot), [0,1,2,3]);
-  next = once(a, 'input'); b.emit('input', { epoch:room.epoch, action:'jump', down:true, slot:0 });
-  assert.equal((await next).slot, 1);
-  next=once(a,'input');b.emit('input',{epoch:room.epoch,action:'movement',generation:3,slot:0,frames:[{tick:1,left:false,right:true,jump:true,dt:1000}]});
-  const movement=await next;
-  assert.equal(movement.slot,1);assert.equal(movement.generation,3);
-  assert.deepEqual(movement.frames,[{tick:1,left:false,right:true,jump:true}],'movement identity and allowed fields are server-owned');
-  next=once(a,'input');
-  b.emit('input',{epoch:room.epoch,action:'movement',generation:3,frames:[{tick:2,left:false,right:'yes',jump:false}]});
-  b.emit('input',{epoch:room.epoch,action:'aim',x:100,y:100});
-  assert.equal((await next).action,'aim','malformed movement rejected');
-  next = once(a, 'room'); b.disconnect(); room = await next;
-  assert.equal(room.phase, 'lobby'); assert.equal(room.players[1], null);
-  next = once(a, 'room'); await request(e, 'join-room', code); room = await next; assert.equal(room.players[1].id, e.id);
-  await request(a, 'leave-room'); assert.equal(rooms.get(code).host, e.id);
-  for (const s of [c,d,e]) await request(s, 'leave-room');
-  assert.equal(rooms.size, 0);
-  await request(c, 'create-room'); assert.equal(rooms.size, 1);
-  console.log('Room flow passed: creation, errors, 4 players, host start, input identity, disconnect, slot reuse, host transfer, cleanup.');
-} finally { clients.forEach(s => s.disconnect()); await new Promise(resolve => sockets.close(resolve)); }
-
+import {roomCode,validCode,validRoom,inputFromPeer,PROTOCOL} from '../dist/protocol.js';
+for(let i=0;i<1000;i++)assert.ok(validCode(roomCode()));
+assert.equal(validCode('000000'),false);assert.equal(validCode('ABCD'),false);
+const host=PROTOCOL+'ABCD23',guest=PROTOCOL+'DEFG45';
+const room={code:'ABCD23',host,phase:'lobby',epoch:0,players:[{id:host,slot:0},{id:guest,slot:1},null,null]};
+assert.ok(validRoom(room,host,guest));
+assert.equal(validRoom({...room,host:guest},host,guest),false);
+assert.equal(validRoom({...room,players:[{id:host,slot:0},{id:guest,slot:0},null,null]},host,guest),false);
+assert.equal(validRoom({...room,players:[{id:host,slot:0},{id:guest,slot:1},{id:guest,slot:2},null]},host,guest),false);
+const input={epoch:3,generation:2,action:'movement',slot:0,frames:[{tick:1,left:false,right:true,jump:false,dt:1000}]};
+assert.deepEqual(inputFromPeer(input,2,3),{epoch:3,generation:2,action:'movement',slot:2,frames:[{tick:1,left:false,right:true,jump:false}]});
+assert.equal(inputFromPeer(input,2,4),undefined);
+assert.equal(inputFromPeer({...input,frames:[{tick:1,left:false,right:'yes',jump:false}]},2,3),undefined);
+assert.equal(inputFromPeer({...input,frames:Array(13).fill(input.frames[0])},2,3),undefined);
+assert.equal(inputFromPeer({...input,generation:-1},2,3),undefined);
+assert.equal(inputFromPeer({...input,action:'aim',x:NaN,y:0},2,3),undefined);
+console.log('Peer protocol passed: codes, host identity, membership, slots, epochs, validated bounded movement.');

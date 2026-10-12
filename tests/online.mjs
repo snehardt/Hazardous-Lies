@@ -1,8 +1,12 @@
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
+import { spawn } from 'node:child_process';
+import { once } from 'node:events';
 const require = createRequire(import.meta.url);
 const { chromium } = require(process.env.PLAYWRIGHT_PATH || 'playwright');
 const browser = await chromium.launch({headless:true, ...(process.env.BROWSER_CHANNEL ? {channel:process.env.BROWSER_CHANNEL} : {})});
+const signaling=process.env.PEER_PUBLIC?undefined:spawn(process.execPath,['--input-type=module','-e',"import {PeerServer} from 'peer';PeerServer({port:0,path:'/peerjs',host:'127.0.0.1'},server=>console.log(server.address().port));"],{stdio:['ignore','pipe','inherit'],windowsHide:true});
+const signalPort=signaling?Number((await once(signaling.stdout,'data'))[0].toString().trim()):0;
 const pages=[], errors=[];
 async function page() {
   const p=await browser.newPage({viewport:{width:1440,height:1100}});pages.push(p);
@@ -15,12 +19,13 @@ receiveSnapshot=state=>{
   const deliver=()=>{const before=players;originalReceiveSnapshot(state);netStats.delivered++;if(players!==before)netStats.packetWrites++;};
   if(netStats.jitter)setTimeout(deliver,[80,0,35][netStats.snapshots%3]);else deliver();
 };
-const originalMovePlayer=movePlayer;movePlayer=(...args)=>{if(predicting){netStats.predicted++;const slot=room.players.find(p=>p?.id===socket.id)?.slot;if(onlineSlots[args[2]]!==slot)netStats.wrongPrediction++;}else netStats.physics++;return originalMovePlayer(...args);};
+const originalMovePlayer=movePlayer;movePlayer=(...args)=>{if(predicting){netStats.predicted++;const slot=room.players.find(p=>p?.id===session.id)?.slot;if(onlineSlots[args[2]]!==slot)netStats.wrongPrediction++;}else netStats.physics++;return originalMovePlayer(...args);};
 const originalMoveBall=moveBall;moveBall=(...args)=>{netStats.ballPhysics++;return originalMoveBall(...args);};
 const originalRender=render;render=(poses=players)=>{if(netStats.capture)netStats.frames.push({x:poses[0]?.x,own:poses[1]?.x,at:performance.now()});return originalRender(poses);};
 const originalReceiveInput=receiveInput;receiveInput=data=>{if(netStats.inputDelay)setTimeout(()=>originalReceiveInput(data),netStats.inputDelay);else originalReceiveInput(data);};
 window.netStats=netStats;
 window.onlineTest={get players(){return players},get room(){return room},get aims(){return aims},get slots(){return onlineSlots},get winner(){return winner},get level(){return levelIndex},get inputSeq(){return inputSeq},get acknowledged(){return acknowledged},sendInput,win,addWall(){platforms.push({x:215,y:100,w:20,h:440,r:0,purpose:'online regression wall'});}};`});});
+  if(!process.env.PEER_PUBLIC)await p.addInitScript(options=>{window.HAZARDOUS_PEER_OPTIONS=options;},{host:'127.0.0.1',port:signalPort,path:'/peerjs',secure:false,config:{iceServers:[]}});
   await p.goto(process.env.TEST_URL || 'http://localhost:5173');await p.click('#play-online');
   await p.waitForFunction(()=>document.querySelector('#online-status').textContent.startsWith('Connected.'));
   return p;
@@ -32,6 +37,9 @@ try {
   const b=await page();await b.fill('#room-code','0000');await b.click('#join-room');await b.waitForFunction(()=>document.querySelector('#online-status').textContent.includes('not found'));
   for(const p of [b,await page(),await page()]){await p.fill('#room-code',code);await p.click('#join-room');await p.waitForFunction(()=>window.onlineTest.room);}
   await a.waitForFunction(()=>window.onlineTest.room.players.filter(Boolean).length===4);
+  const full=await page();await full.fill('#room-code',code);await full.click('#join-room');
+  await full.waitForFunction(()=>document.querySelector('#online-status').textContent.includes('full'));
+  await full.close();pages.pop();
   await a.screenshot({path:'artifacts/online-lobby.png'});
   await a.click('#start-game');for(const p of pages)await p.waitForFunction(()=>window.onlineTest.players.length===4 && window.onlineTest.room.phase==='playing');
   const positions=await a.evaluate(()=>window.onlineTest.players.map(p=>p.x));
@@ -53,6 +61,10 @@ try {
   assert.match(await b.locator('#winner').textContent(),/P4/);
   await a.click('#again');await b.waitForFunction(()=>window.onlineTest.level===1);
   await a.screenshot({path:'artifacts/online-game.png'});
+  // Long recall history exceeds PeerJS JSON's message limit; snapshots use binary chunking.
+  await a.evaluate(()=>{for(const p of window.onlineTest.players)p.ball.visited=Array.from({length:512},(_,i)=>({x:i+0.123456789,y:500.987654321}));});
+  await b.waitForFunction(()=>window.onlineTest.players.every(p=>p.ball.visited.length>=500));
+
   // Exercise actual browser renders under delayed, bunched and out-of-order delivery.
   await b.evaluate(()=>{window.netStats.jitter=true;window.netStats.capture=true;window.netStats.frames=[];});
   const packetsBefore=await b.evaluate(()=>window.netStats.snapshots);
@@ -102,10 +114,10 @@ try {
   const replacement=await page();await replacement.fill('#room-code',code);await replacement.click('#join-room');
   await replacement.waitForFunction(()=>window.onlineTest.room?.players[2]?.id);
   assert.match(await replacement.locator('#your-player').textContent(),/PLAYER 3/);
-  await a.click('#leave-online');await a.click('#play');
+  await a.click('#leave-online');await b.waitForFunction(()=>window.onlineTest.room===null);await a.click('#play');
   await a.keyboard.down('ArrowRight');await a.waitForTimeout(150);await a.keyboard.up('ArrowRight');
   assert.equal(await a.evaluate(()=>window.onlineTest.players.length),2);
   assert.deepEqual(errors,[]);
-  console.log('Online browser tests passed: four clients, lobby, movement ownership, double jump, mouse world aim, own-ball swing, P4 win, level sync, disconnect/rejoin, return to local.');
-} finally { await browser.close(); }
+  console.log('PeerJS/WebRTC browser tests passed: four clients, lobby, movement ownership, double jump, mouse world aim, own-ball swing, P4 win, level sync, disconnect/rejoin, return to local.');
+} finally { await browser.close();if(signaling){const exited=once(signaling,'exit');signaling.kill();await exited;} }
 

@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "node server.mjs",
-    "build": "tsc",
+    "build": "tsc && esbuild src/main.ts --bundle --format=esm --target=es2022 --outfile=dist/main.js",
     "check": "tsc --noEmit",
     "test": "node tests/smoke.mjs",
     "test:rooms": "node tests/rooms.mjs",
@@ -14,10 +14,11 @@
     "test:prediction": "node tests/prediction.mjs"
   },
   "devDependencies": {
+    "esbuild": "^0.28.2",
+    "peer": "^1.0.2",
     "typescript": "^5.9.3"
   },
   "dependencies": {
-    "socket.io": "^4.8.4",
-    "socket.io-client": "^4.8.4"
+    "peerjs": "^1.5.5"
   }
 }
