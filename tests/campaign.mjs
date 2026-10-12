@@ -271,6 +271,23 @@ try {
   t.keys.clear();t.newMatch();return out;
  });
  console.log('Magnet:',magnet);for(const [name,passed]of Object.entries(magnet))assert.equal(passed,true,name);
+ const walls=await page.evaluate(()=>{
+   const t=window.testGame;t.loadLevel(0);const saved=t.platforms.slice();let samples=0;
+   try {
+     for(const width of [2,20,80]) {
+       t.platforms.splice(0,t.platforms.length,{x:400,y:100,w:width,h:400,r:0,purpose:'wall regression'});
+       for(const side of [-1,1])for(const overlap of [0,.75,3,8])for(const speed of [265,2200]) {
+         const face=side<0?400:400+width;
+         const p={...t.players[0],x:face+side*(13-overlap),y:300,vx:-side*speed,vy:0,grounded:false,tumble:true,falling:0};
+         t.movePlayer(p,.06,0);
+         if(side<0 && p.x+13>face+.001 || side>0 && p.x-13<face-.001)throw Error('Wall pass-through '+JSON.stringify({width,side,overlap,speed,x:p.x}));
+         samples++;
+       }
+     }
+   } finally {t.platforms.splice(0,t.platforms.length,...saved);t.newMatch();}
+   return samples;
+ });
+ console.log('Wall sweeps and shallow overlap recovery:',walls);
  const floors=await page.evaluate(()=>{
   const t=window.testGame,dt=1/120;let samples=0;
   for(let level=0;level<10;level++) {

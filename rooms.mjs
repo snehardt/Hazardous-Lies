@@ -49,14 +49,17 @@ export function attachRooms(io) {
     socket.on('input', data => {
       const r = current();
       if (!r || r.phase !== 'playing' || data?.epoch !== r.epoch) return;
-      if (!['left', 'right', 'jump', 'recall', 'swing', 'aim', 'clear'].includes(data.action)) return;
+      if (!['movement', 'left', 'right', 'jump', 'recall', 'swing', 'aim', 'clear'].includes(data.action)) return;
+      if(data.action==='movement' && (!Number.isSafeInteger(data.generation) || !Array.isArray(data.frames) || data.frames.length<1 || data.frames.length>12 || data.frames.some(f=>!Number.isSafeInteger(f?.tick) || f.tick<1 || ['left','right','jump'].some(k=>typeof f[k]!=='boolean'))))return;
       if (data.action === 'aim' && (!Number.isFinite(data.x) || !Number.isFinite(data.y))) return;
-      if (data.action !== 'aim' && data.action !== 'clear' && typeof data.down !== 'boolean') return;
+      if (!['aim','clear','movement'].includes(data.action) && typeof data.down !== 'boolean') return;
       const now = Date.now();
       if (now - (socket.data.inputWindow || 0) > 1000) { socket.data.inputWindow = now; socket.data.inputCount = 0; }
       if (++socket.data.inputCount > 240) return;
       io.to(r.host).emit('input', { slot: r.slots.indexOf(socket.id), epoch: r.epoch, action: data.action,
         seq: Number.isSafeInteger(data.seq) && data.seq > 0 ? data.seq : 0,
+        generation:data.generation,
+        frames:data.action==='movement'?data.frames.map(({tick,left,right,jump})=>({tick,left,right,jump})):undefined,
         down: data.down, x: Math.max(-1280, Math.min(2560, data.x || 0)), y: Math.max(-640, Math.min(1280, data.y || 0)) });
     });
     socket.on('snapshot', data => {

@@ -8,19 +8,19 @@ async function page() {
   const p=await browser.newPage({viewport:{width:1440,height:1100}});pages.push(p);
   p.on('pageerror',e=>errors.push(e.message));
   await p.route('**/dist/main.js',async route=>{const response=await route.fetch();await route.fulfill({response,body:(await response.text())+`
-const netStats={snapshots:0,packetWrites:0,physics:0,ballPhysics:0,frames:[],capture:false,jitter:false,delivered:0};
+const netStats={snapshots:0,packetWrites:0,physics:0,predicted:0,wrongPrediction:0,ballPhysics:0,frames:[],capture:false,jitter:false,delivered:0};
 const originalReceiveSnapshot=receiveSnapshot;
 receiveSnapshot=state=>{
   netStats.snapshots++;
   const deliver=()=>{const before=players;originalReceiveSnapshot(state);netStats.delivered++;if(players!==before)netStats.packetWrites++;};
   if(netStats.jitter)setTimeout(deliver,[80,0,35][netStats.snapshots%3]);else deliver();
 };
-const originalMovePlayer=movePlayer;movePlayer=(...args)=>{netStats.physics++;return originalMovePlayer(...args);};
+const originalMovePlayer=movePlayer;movePlayer=(...args)=>{if(predicting){netStats.predicted++;const slot=room.players.find(p=>p?.id===socket.id)?.slot;if(onlineSlots[args[2]]!==slot)netStats.wrongPrediction++;}else netStats.physics++;return originalMovePlayer(...args);};
 const originalMoveBall=moveBall;moveBall=(...args)=>{netStats.ballPhysics++;return originalMoveBall(...args);};
 const originalRender=render;render=(poses=players)=>{if(netStats.capture)netStats.frames.push({x:poses[0]?.x,own:poses[1]?.x,at:performance.now()});return originalRender(poses);};
 const originalReceiveInput=receiveInput;receiveInput=data=>{if(netStats.inputDelay)setTimeout(()=>originalReceiveInput(data),netStats.inputDelay);else originalReceiveInput(data);};
 window.netStats=netStats;
-window.onlineTest={get players(){return players},get room(){return room},get aims(){return aims},get slots(){return onlineSlots},get winner(){return winner},get level(){return levelIndex},get inputSeq(){return inputSeq},get acknowledged(){return acknowledged},sendInput,win};`});});
+window.onlineTest={get players(){return players},get room(){return room},get aims(){return aims},get slots(){return onlineSlots},get winner(){return winner},get level(){return levelIndex},get inputSeq(){return inputSeq},get acknowledged(){return acknowledged},sendInput,win,addWall(){platforms.push({x:215,y:100,w:20,h:440,r:0,purpose:'online regression wall'});}};`});});
   await p.goto(process.env.TEST_URL || 'http://localhost:5173');await p.click('#play-online');
   await p.waitForFunction(()=>document.querySelector('#online-status').textContent.startsWith('Connected.'));
   return p;
@@ -61,7 +61,9 @@ try {
   const changes=network.frames.slice(1).filter((f,i)=>Math.abs(f.x-network.frames[i].x)>.01).length;
   assert.ok(changes>network.snapshots-packetsBefore,'rendered movement has more steps than incoming snapshots');
   assert.equal(network.packetWrites,0,'packet handlers never overwrite rendered positions');
-  assert.equal(network.physics,0,'joining clients never simulate players');
+  assert.equal(network.physics,0,'joining clients never run authoritative movement');
+  assert.ok(network.predicted>0,'joining clients predict their own movement');
+  assert.equal(network.wrongPrediction,0,'never predict someone else');
   assert.equal(network.ballPhysics,0,'joining clients never simulate balls');
   assert.ok(network.snapshots-packetsBefore>=15 && network.snapshots-packetsBefore<=30,'bounded state update rate');
   // Delay guest input delivery: local feedback must appear before host movement.
@@ -73,8 +75,28 @@ try {
   await b.waitForTimeout(60);
   assert.equal(await a.evaluate(()=>window.onlineTest.players[1].x),initial,'host has not received delayed input yet');
   assert.ok(await b.evaluate(x=>window.netStats.frames.some(f=>f.own>x+1),initial),'own movement feedback is immediate');
+  await b.evaluate(()=>{window.netStats.jitter=true;});
+  await b.waitForTimeout(550);
+  const ownFrames=await b.evaluate(()=>window.netStats.frames.map(f=>f.own));
+  assert.ok(ownFrames.at(-1)>initial+80,'continuous local movement, not a short visual offset');
+  assert.ok(ownFrames.slice(1).every((x,i)=>x>=ownFrames[i]-1),'acknowledgement does not pull movement backwards');
   await b.evaluate(()=>window.onlineTest.sendInput('right',false));await b.waitForTimeout(450);
+  await b.evaluate(()=>{window.netStats.jitter=false;});
   await a.evaluate(()=>{window.netStats.inputDelay=0;});
+
+  // Both predicted presentation and authoritative movement must stop at the wall.
+  for(const p of pages)await p.evaluate(()=>window.onlineTest.addWall());
+  await a.click('#restart');await b.waitForTimeout(250);
+  await a.evaluate(()=>{window.netStats.inputDelay=120;});
+  await b.evaluate(()=>{window.netStats.jitter=true;window.netStats.frames=[];window.onlineTest.sendInput('right',true);});
+  await b.waitForTimeout(900);
+  await b.evaluate(()=>window.onlineTest.sendInput('right',false));await b.waitForTimeout(300);
+  const wallFrames=await b.evaluate(()=>window.netStats.frames.map(f=>f.own));
+  assert.ok(wallFrames.every(x=>x<=202.01),'predicted player never crosses wall under latency');
+  assert.ok(await a.evaluate(()=>window.onlineTest.players[1].x<=202.01),'host prevents wall crossing');
+  assert.ok(wallFrames.some(x=>x>201),'player reaches wall instead of freezing early');
+  await a.evaluate(()=>{window.netStats.inputDelay=0;});
+  await b.evaluate(()=>{window.netStats.jitter=false;});
 
   await pages[2].close();await a.waitForFunction(()=>window.onlineTest.room.phase==='lobby');
   const replacement=await page();await replacement.fill('#room-code',code);await replacement.click('#join-room');

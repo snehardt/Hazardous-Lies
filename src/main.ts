@@ -1,6 +1,7 @@
 import { levels, type Platform } from './levels.js';
 import { connectOnline, type Room } from './online.js';
 import { SnapshotBuffer } from './snapshots.js';
+import { MovementPrediction, MovementQueue, MOVEMENT_STEP, type MoveCommand } from './prediction.js';
 let online = false, room: Room | null = null, onlineSlots: number[] = [];
 let socket: Awaited<ReturnType<typeof connectOnline>> | undefined;
 const onlineKeys = Array.from({length:4}, () => new Set<string>());
@@ -45,17 +46,44 @@ const keys = new Set<string>();
 let players: Player[] = [], particles: Particle[] = [], started = false, winner = -1, paused = false;
 let time = 0, last = 0, accumulator = 0, sound = false, audio: AudioContext | undefined;
 let hintTimer = 0;
-type GameSnapshot = { epoch:number; seq:number; sentAt:number; generation:number; players:Player[]; levelIndex:number; scores:number[]; results:(number|null)[]; winner:number; time:number; acknowledged:number[] };
-const snapshots = new SnapshotBuffer<Player, GameSnapshot>();
+type GameSnapshot = { epoch:number; seq:number; sentAt:number; generation:number; players:Player[]; levelIndex:number; scores:number[]; results:(number|null)[]; winner:number; time:number; acknowledged:number[]; movementAck:number[] };
+const snapshots = new SnapshotBuffer<Player, GameSnapshot>((pose,previous,next,index)=>{
+  const terrain=levels[index].platforms;
+  if(!pose.falling && (!playerPoseClear(pose,terrain) || !playerPathClear(previous,pose,terrain))) {
+    pose.x=previous.x;pose.y=previous.y;
+  }
+  if(!previous.magnetActive && !next.magnetActive && !pose.ball.falling && terrain.some(s=>roundedContact(pose.ball.x,pose.ball.y,8.9,s))) {
+    pose.ball.x=previous.ball.x;pose.ball.y=previous.ball.y;
+  }
+  return pose;
+});
 let generation = 0, snapshotSeq = 0, nextSnapshotAt = 0, displayedSeq = -1;
 let inputSeq = 0, receivedGeneration = -1;
 const acknowledged = [0,0,0,0];
 const localHeld = new Set<string>();
-let feedback = {seq:0, x:0, y:0, targetX:0, targetY:0, until:0};
+let reconciledSeq=-1;
+let predicting=false, predictionKeys:Set<string>|undefined;
+let jumpPending=0, predictionAccumulator=0, predictionGeneration=-1;
+let correction={x:0,y:0};
+let latestState:GameSnapshot|undefined;
+const movementQueues=Array.from({length:4},()=>new MovementQueue());
+const prediction=new MovementPrediction<Player>(p=>({...p,ball:{...p.ball}}),(p,c)=>{
+  const slot=room?.players.find(member=>member?.id===socket?.id)?.slot;
+  const i=onlineSlots.indexOf(slot ?? -1);
+  predicting=true;
+  try { stepMovement(p,c,i); } finally { predicting=false;predictionKeys=undefined; }
+});
+function stepMovement(p:Player,c:MoveCommand,i:number) {
+  const held=new Set<string>();if(c.left)held.add('KeyA');if(c.right)held.add('KeyD');
+  predictionKeys=held;
+  try { if(c.jump)jump(p,i);movePlayer(p,MOVEMENT_STEP,i); } finally {predictionKeys=undefined;}
+}
 let localAim = {x:640,y:200}, localChargeAt = 0;
 function clearNetworkPresentation() {
   snapshots.clear(); displayedSeq=-1; receivedGeneration=-1; localHeld.clear(); localChargeAt=0;
-  feedback={seq:0,x:0,y:0,targetX:0,targetY:0,until:0}; acknowledged.fill(0); nextSnapshotAt=0;
+  prediction.clear();reconciledSeq=-1;latestState=undefined;correction={x:0,y:0};
+  jumpPending=0;predictionAccumulator=0;predictionGeneration=-1;movementQueues.forEach(q=>q.clear());
+  acknowledged.fill(0);nextSnapshotAt=0;
 }
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
 function reset(play = true) {
@@ -110,7 +138,7 @@ function beginFall(body: Player | Ball) {
 levelSelect.addEventListener('change', () => loadLevel(Number(levelSelect.value)));
 $('new-match').addEventListener('click', newMatch);
 function beep(freq: number, duration = .08, type: OscillatorType = 'sine', volume = .045) {
-  if (!sound) return;
+  if (predicting || !sound) return;
   audio ??= new AudioContext();
   void audio.resume();
   const o = audio.createOscillator(), gain = audio.createGain();
@@ -118,8 +146,9 @@ function beep(freq: number, duration = .08, type: OscillatorType = 'sine', volum
   gain.gain.setValueAtTime(volume, audio.currentTime); gain.gain.exponentialRampToValueAtTime(.001, audio.currentTime + duration);
   o.connect(gain).connect(audio.destination); o.start(); o.stop(audio.currentTime + duration);
 }
-function setHint(message: string, seconds = 3) { $('hint').textContent = message; hintTimer = seconds; }
+function setHint(message: string, seconds = 3) { if(predicting)return; $('hint').textContent = message; hintTimer = seconds; }
 function burst(x: number, y: number, color: string, count = 12, force = 150) {
+  if(predicting)return;
   for (let i = 0; i < count; i++) particles.push({ x, y, vx: (Math.random() - .5) * force * 2, vy: -Math.random() * force, life: .5 + Math.random() * .4, max: .9, color, size: 2 + Math.random() * 3 });
 }
 function hitDown(i: number) {
@@ -242,13 +271,13 @@ function integratePlayer(p: Player, dt: number, i: number) {
     return;
   }
   if (inHazard(p.x, p.y, 24)) { beginFall(p); return; }
-  const c = inputControls(i), keys = inputKeys(i), wasGrounded = p.grounded;
+  const c = inputControls(i), keys = predictionKeys ?? inputKeys(i), wasGrounded = p.grounded;
   const oldX = p.x;
   p.swing = Math.max(0, p.swing - dt); p.anim += dt * (Math.abs(p.vx) > 30 ? 12 : 3);
   if (p.set && !p.tumble) {
     if (p.ball.falling || Math.hypot(p.ball.vx, p.ball.vy) > 90 || Math.hypot(p.x - p.ball.x, p.y - (p.ball.y - 16)) > 130) { p.set = false; p.charging = false; }
     else {
-      if (online) aimPlayer(i);
+      if (online) aimPlayer(i,p);
       else {
       if (keys.has(c.left)) p.facing = -1;
       if (keys.has(c.right)) p.facing = 1;
@@ -272,9 +301,10 @@ function integratePlayer(p: Player, dt: number, i: number) {
     const sideTop = surfaceY(s, sideX), bottom = platformBottom(s,sideX);
     if (support && sideX >= support.x - .1 && sideX <= support.x + support.w + .1 && Math.abs(surfaceY(support, sideX) - sideTop) < 2) continue;
     // The sloping top is walkable; only actual vertical side faces block horizontal motion.
+    // Testing the old center also catches shallow overlaps left by corner landings.
     if (p.y + 24 <= sideTop + 5 || p.y - 24 >= bottom - 2) continue;
-    if (p.vx > 0 && oldX + 13 <= s.x + .5 && p.x + 13 > s.x) { p.x = s.x - 13; p.wall = 1; p.vx = 0; }
-    else if (p.vx < 0 && oldX - 13 >= s.x + s.w - .5 && p.x - 13 < s.x + s.w) { p.x = s.x + s.w + 13; p.wall = -1; p.vx = 0; }
+    if (p.vx > 0 && oldX <= s.x && p.x + 13 > s.x) { p.x = s.x - 13; p.wall = 1; p.vx = 0; }
+    else if (p.vx < 0 && oldX >= s.x + s.w && p.x - 13 < s.x + s.w) { p.x = s.x + s.w + 13; p.wall = -1; p.vx = 0; }
   }
   if (p.x < 14) { p.x = 14; p.vx = 0; p.wall = -1; }
   if (p.x > W - 14) { p.x = W - 14; p.vx = 0; p.wall = 1; }
@@ -561,7 +591,11 @@ function updateHUD() {
 function update(dt: number) {
   time += dt;
   if (started && winner < 0 && !paused && (!online || isHost())) {
-    players.forEach((p, i) => movePlayer(p, dt, i));
+    players.forEach((p, i) => {
+      if(online && room?.players[onlineSlots[i]]?.id!==socket?.id) {
+        movementQueues[onlineSlots[i]].advance(dt,command=>stepMovement(p,command,i),()=>stepMovement(p,{tick:0,left:false,right:false,jump:false},i));
+      } else movePlayer(p,dt,i);
+    });
     players.forEach((p, i) => { if (winner < 0) moveBall(p.ball, dt, i); });
     for (let ai=0;ai<players.length;ai++) for(let bi=ai+1;bi<players.length;bi++) {
     const a = players[ai].ball, b = players[bi].ball, dx = b.x - a.x, dy = b.y - a.y, d = Math.hypot(dx, dy);
@@ -755,13 +789,13 @@ function frame(now: number) {
   let presented = players;
   if (online && !isHost() && room?.phase==='playing') {
     const state=snapshots.sample(elapsed*1000);
-    if(state) { applySnapshot(state); presented=presentLocalFeedback(state, elapsed); }
+    if(state) { applySnapshot(state); presented=presentPredictedPlayer(state, elapsed); }
   }
   if (online && isHost() && room?.phase==='playing' && socket?.connected && now>=nextSnapshotAt) {
     // One send after physics, at most once per frame. Never catch up with packet bursts.
     nextSnapshotAt+=40;
     if(nextSnapshotAt<=now)nextSnapshotAt=now+40;
-    socket.volatile.emit('snapshot',{epoch:room.epoch,seq:++snapshotSeq,sentAt:now,generation,players,levelIndex,scores,results,winner,time,acknowledged});
+    socket.volatile.emit('snapshot',{epoch:room.epoch,seq:++snapshotSeq,sentAt:now,generation,players,levelIndex,scores,results,winner,time,acknowledged,movementAck:movementQueues.map(q=>q.acknowledged)});
   }
   render(presented); requestAnimationFrame(frame);
 }
@@ -774,25 +808,30 @@ function sendInput(action:string, down?:boolean, x?:number, y?:number) {
   if(slot===undefined)return;
   const data={epoch:room.epoch,seq:++inputSeq,action,down,x,y};
   if(isHost()) { receiveInput({...data,slot}); return; }
-  if(action==='clear') { localHeld.clear(); localChargeAt=0; feedback.until=0; }
+  if(action==='clear') { localHeld.clear();localChargeAt=0;jumpPending=0; }
   else if(action==='aim') localAim={x:x!,y:y!};
   else {
+    const was=localHeld.has(action);
     if(down)localHeld.add(action);else localHeld.delete(action);
+    if(action==='jump' && down && !was)jumpPending=Math.min(2,jumpPending+1);
     if(action==='swing')localChargeAt=down?performance.now():0;
-    if(down && (action==='left'||action==='right'||action==='jump')) {
-      // Bounded visual anticipation only; host still owns movement and collisions.
-      feedback={seq:inputSeq,x:feedback.x,y:feedback.y,targetX:action==='left'?-12:action==='right'?12:0,targetY:action==='jump'?-8:0,until:performance.now()+200};
-    }
+
   }
-  socket.emit('input',data);
+  if(['left','right','jump'].includes(action))return;
+  socket.emit('input',{...data,generation:receivedGeneration});
 }
-function aimPlayer(i:number) {
-  const p=players[i], aim=aims[i], dx=aim.x-p.ball.x, dy=aim.y-p.ball.y;
+function aimPlayer(i:number,p=players[i]) {
+  const aim=predicting?localAim:aims[i], dx=aim.x-p.ball.x, dy=aim.y-p.ball.y;
   p.facing=dx<0?-1:1; p.angle=Math.atan2(-dy, Math.abs(dx));
 }
 function receiveInput(data:any) {
   if (!isHost() || room?.phase!=='playing' || data.epoch!==room.epoch) return;
   const i=onlineSlots.indexOf(data.slot), p=players[i]; if (!p) return;
+  if(data.action==='movement') {
+    if(data.generation===generation && Array.isArray(data.frames))movementQueues[data.slot].push(data.frames);
+    return;
+  }
+  if(data.generation!==undefined && data.generation!==generation)return;
   acknowledged[data.slot]=Math.max(acknowledged[data.slot],data.seq || 0);
   const held=onlineKeys[i];
   if (data.action==='clear') { held.clear(); p.charging=false; p.power=0; releaseMagnet(p); return; }
@@ -824,14 +863,15 @@ canvas.addEventListener('mousedown',e=>{if(online && e.button===0){e.preventDefa
 window.addEventListener('mouseup',e=>{if(online && e.button===0){pointerAim(e);sendInput('swing',false);}});
 function receiveSnapshot(state:GameSnapshot) {
   if (!online || isHost() || room?.phase!=='playing' || state.epoch!==room.epoch) return;
-  if(snapshots.push(state,performance.now()) && receivedGeneration!==state.generation) {
-    if(receivedGeneration!==-1) {
-      localHeld.clear();localChargeAt=0;
-      feedback={seq:0,x:0,y:0,targetX:0,targetY:0,until:0};
-    }
-    receivedGeneration=state.generation;
+  if(!snapshots.push(state,performance.now()))return;
+  if(receivedGeneration!==state.generation) {
+    if(receivedGeneration!==-1){localHeld.clear();localChargeAt=0;}
+    receivedGeneration=state.generation;prediction.clear();predictionGeneration=state.generation;
+    predictionAccumulator=0;jumpPending=0;correction={x:0,y:0};
   }
+  latestState=state;
 }
+
 function applySnapshot(state:GameSnapshot) {
   levelIndex=state.levelIndex; platforms=levels[levelIndex].platforms;hole=levels[levelIndex].hole;
   players=state.players; started=true;paused=false;
@@ -843,29 +883,57 @@ function applySnapshot(state:GameSnapshot) {
   levelSelect.value=String(levelIndex);$('course-name').textContent=`HOLE ${levelIndex+1} / 10`;
   $('win').classList.toggle('hidden',winner<0);if(winner>=0)showWinner();updateHUD();
 }
-function presentLocalFeedback(state:GameSnapshot, dt:number):Player[] {
-  const slot=room?.players.find(p=>p?.id===socket?.id)?.slot;
-  const i=onlineSlots.indexOf(slot ?? -1), p=state.players[i];
-  if(!p)return state.players;
-  const rendered=state.players.slice(), own={...p,ball:{...p.ball}};
-  const pending=(state.acknowledged[slot!] || 0)<feedback.seq && performance.now()<feedback.until;
-  const anticipate=pending && !own.falling && !own.tumble && winner<0;
-  const blend=1-Math.exp(-dt*25);
-  feedback.x+=((anticipate?feedback.targetX:0)-feedback.x)*blend;
-  feedback.y+=((anticipate?feedback.targetY:0)-feedback.y)*blend;
-  // Do not anticipate through a wall or while aiming; no ball prediction.
-  if(!own.set && !own.tumble && !own.falling && winner<0) {
-    const x=clamp(own.x+feedback.x,14,W-14), y=own.y+feedback.y;
-    if(!platforms.some(s=>roundedContact(x,y,13,s))) {own.x=x;own.y=y;}
-    const direction=Number(localHeld.has('right'))-Number(localHeld.has('left'));
-    if(direction)own.facing=direction;
+function presentPredictedPlayer(state:GameSnapshot,dt:number):Player[] {
+  const slot=room?.players.find(member=>member?.id===socket?.id)?.slot;
+  const i=onlineSlots.indexOf(slot ?? -1);
+  if(i<0 || !latestState || latestState.generation!==state.generation)return state.players;
+  const authority=latestState.players[i];
+  if(predictionGeneration!==latestState.generation)return state.players;
+  if(latestState.seq!==reconciledSeq) {
+    const before=prediction.pose;
+    prediction.reconcile(authority,latestState.movementAck[slot!] || 0);
+    const after=prediction.pose!;
+    const discontinuity=!before || before.revision!==after.revision || !!before.falling!==!!after.falling || latestState.winner>=0;
+    if(discontinuity || Math.hypot((before?.x??after.x)-after.x,(before?.y??after.y)-after.y)>80)correction={x:0,y:0};
+    else if(before) {correction.x+=before.x-after.x;correction.y+=before.y-after.y;}
+    reconciledSeq=latestState.seq;
   }
-  if(localChargeAt && winner<0 && !own.tumble && !own.falling && !own.ball.falling && Math.hypot(own.x-own.ball.x,own.y-(own.ball.y-16))<92 && Math.hypot(own.ball.vx,own.ball.vy)<75) {
+  predictionAccumulator+=dt;
+  while(predictionAccumulator>=STEP) {
+    if(latestState.winner<0)prediction.advance({left:localHeld.has('left'),right:localHeld.has('right'),jump:jumpPending>0});
+    if(jumpPending>0)jumpPending--;
+    predictionAccumulator-=STEP;
+  }
+  const frames=prediction.drain();
+  if(frames.length && socket?.connected)socket.emit('input',{epoch:room!.epoch,generation:state.generation,action:'movement',frames});
+  const rendered=state.players.slice(),own={...prediction.pose!,ball:state.players[i].ball};
+  const decay=Math.exp(-dt*18);correction.x*=decay;correction.y*=decay;
+  // Never ease a correction through terrain. Hard corrections are preferable to wall clipping.
+  const candidate={...own,x:own.x+correction.x,y:own.y+correction.y};
+  if(playerPoseClear(candidate) && playerPathClear(own,candidate)){own.x=candidate.x;own.y=candidate.y;}
+  else correction={x:0,y:0};
+  if(localChargeAt && latestState.winner<0 && !own.tumble && !own.falling && !own.ball.falling && Math.hypot(own.x-own.ball.x,own.y-(own.ball.y-16))<92 && Math.hypot(own.ball.vx,own.ball.vy)<75) {
     own.set=true;own.charging=true;own.power=Math.min(1,(performance.now()-localChargeAt)/1000*.66);
   }
-  if(own.set) { const dx=localAim.x-own.ball.x;own.facing=dx<0?-1:1;own.angle=Math.atan2(own.ball.y-localAim.y,Math.abs(dx)); }
+  if(own.set) {const dx=localAim.x-own.ball.x;own.facing=dx<0?-1:1;own.angle=Math.atan2(own.ball.y-localAim.y,Math.abs(dx));}
   rendered[i]=own;return rendered;
 }
+
+// Match the upright collision hull; supporting floor contact is allowed.
+function playerPoseClear(p:{x:number;y:number},terrain=platforms) {
+  return p.x>=14 && p.x<=W-14 && !terrain.some(s=>{
+    const left=Math.max(p.x-12.9,s.x),right=Math.min(p.x+12.9,s.x+s.w);
+    if(left>=right)return false;
+    const top=surfaceY(s,clamp(p.x,s.x,s.x+s.w));
+    return p.y+23.9>top+5 && p.y-23.9<Math.max(platformBottom(s,left),platformBottom(s,right))-2;
+  });
+}
+function playerPathClear(a:{x:number;y:number},b:{x:number;y:number},terrain=platforms) {
+  const steps=Math.ceil(Math.hypot(b.x-a.x,b.y-a.y)/3);
+  for(let n=1;n<=steps;n++)if(!playerPoseClear({x:a.x+(b.x-a.x)*n/steps,y:a.y+(b.y-a.y)*n/steps},terrain))return false;
+  return true;
+}
+
 function receiveRoom(next:Room) {
   const start=next.phase==='playing' && (room?.phase!=='playing' || room.epoch!==next.epoch);
   if(room?.epoch!==next.epoch || next.phase==='lobby')clearNetworkPresentation();

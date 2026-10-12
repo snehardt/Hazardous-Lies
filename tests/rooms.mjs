@@ -21,6 +21,14 @@ try {
   assert.equal(room.phase, 'playing'); assert.deepEqual(room.players.map(p => p.slot), [0,1,2,3]);
   next = once(a, 'input'); b.emit('input', { epoch:room.epoch, action:'jump', down:true, slot:0 });
   assert.equal((await next).slot, 1);
+  next=once(a,'input');b.emit('input',{epoch:room.epoch,action:'movement',generation:3,slot:0,frames:[{tick:1,left:false,right:true,jump:true,dt:1000}]});
+  const movement=await next;
+  assert.equal(movement.slot,1);assert.equal(movement.generation,3);
+  assert.deepEqual(movement.frames,[{tick:1,left:false,right:true,jump:true}],'movement identity and allowed fields are server-owned');
+  next=once(a,'input');
+  b.emit('input',{epoch:room.epoch,action:'movement',generation:3,frames:[{tick:2,left:false,right:'yes',jump:false}]});
+  b.emit('input',{epoch:room.epoch,action:'aim',x:100,y:100});
+  assert.equal((await next).action,'aim','malformed movement rejected');
   next = once(a, 'room'); b.disconnect(); room = await next;
   assert.equal(room.phase, 'lobby'); assert.equal(room.players[1], null);
   next = once(a, 'room'); await request(e, 'join-room', code); room = await next; assert.equal(room.players[1].id, e.id);

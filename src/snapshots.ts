@@ -12,6 +12,7 @@ function mixBody<T extends Body>(a: T, b: T, t: number): T {
 }
 
 export class SnapshotBuffer<P extends Pose, S extends Snapshot<P>> {
+  constructor(private constrain?:(pose:P,previous:P,next:P,levelIndex:number)=>P) {}
   private queue: S[] = [];
   private cursor = 0;
   private lastSeq = -1;
@@ -51,7 +52,7 @@ export class SnapshotBuffer<P extends Pose, S extends Snapshot<P>> {
         if (p.flip > 0 && next.flip > 0) out.flip = p.flip + (next.flip - p.flip) * t;
       }
       out.ball = mixBody(p.ball, next.ball, t);
-      return out;
+      return this.constrain ? this.constrain(out,p,next,a.levelIndex) : out;
     });
     return { ...a, players };
   }
