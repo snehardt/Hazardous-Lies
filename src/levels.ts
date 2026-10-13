@@ -193,7 +193,7 @@ export const levels: Level[] = [
    land(780,560,220,'Final bank-shot setup floor'),
    wall(0,115,18,445,'Left ricochet wall'),
    wall(1264,115,16,445,'Right ricochet wall'),
-   ramp(180,560,80,-115,'Smooth approach from chamber floor onto the central hill'),
+   ramp(200,560,60,-115,'Smooth approach from chamber floor onto the central hill'),
    ramp(260,445,160,-165,'Solid central hill ascent fills unused triangular space'),
    land(420,280,80,'Broad hilltop sand catch',true),
    ramp(500,280,130,160,'Solid descent into the second chamber'),

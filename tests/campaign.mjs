@@ -10,7 +10,7 @@ page.on('pageerror',e=>errors.push(e.message));
 await page.addInitScript(()=>{window.requestAnimationFrame=()=>0});
 await page.route('**/dist/main.js',async route=>{
  const response=await route.fetch();
- await route.fulfill({response,body:(await response.text())+'\nwindow.testGame={get players(){return players}, get winner(){return winner}, get platforms(){return platforms},get hole(){return hole},get levelIndex(){return levelIndex},levels,scores,results,keys,colors,palette,selectedColors,reset,loadLevel,newMatch,update,moveBall,movePlayer,jump,hitDown,hitUp,shotSpeed,roundedContact,render,win,recallClear,releaseMagnet,moveMagnet,routeDistance,magnetAngle,trackBall,respawnBall};'});
+ await route.fulfill({response,body:(await response.text())+'\nwindow.testGame={get players(){return players}, get winner(){return winner}, get platforms(){return platforms},get hole(){return hole},get levelIndex(){return levelIndex},levels,scores,results,keys,colors,palette,selectedColors,reset,loadLevel,newMatch,update,moveBall,movePlayer,jump,hitDown,hitUp,shotSpeed,roundedContact,render,win,recallClear,releaseMagnet,moveMagnet,routeDistance,magnetAngle,trackBall,respawnBall,startingPositions,playerPoseClear,surfaceY,platformBottom};'});
 });
 try {
  await page.goto(process.env.TEST_URL || 'http://localhost:5173');
@@ -34,7 +34,7 @@ try {
   t.loadLevel(0);out.levelChangesDoNotAwardPoints=t.scores.every(s=>s===0);
   const b=t.players[1].ball;b.x=t.hole.x;b.y=t.hole.y-8;b.resting=true;t.moveBall(b,1/120,1);
   out.cupAwardsOwner=t.scores[0]===0&&t.scores[1]===1&&document.querySelector('#p2-score').textContent==='1 POINT';
-  out.winnerUsesSelectedColor=document.querySelector('#winner').textContent.includes('P2 GREEN');
+  t.win(0);out.winnerUsesSelectedColor=document.querySelector('#winner').textContent.includes('P2 GREEN');
   t.newMatch();const context=document.querySelector('#game').getContext('2d'),original=context.fillText,words=[];
   context.fillText=function(text,...args){words.push(text);return original.call(this,text,...args)};t.render();context.fillText=original;
   out.cleanCourse=words.length===0;
@@ -47,20 +47,20 @@ try {
   const t=window.testGame, dt=1/120, checks={};
   t.newMatch(); const p=t.players[0];
   t.keys.add('KeyD'); for(let j=0;j<20;j++) t.update(dt); t.keys.clear();
-  checks.movement=p.x>t.levels[0].start.x+10;
+  checks.movement=p.vx>0;
   t.jump(p,0); t.update(dt); t.jump(p,0); checks.doubleJump=p.jumps===2;
   t.reset(); t.hitDown(0); checks.set=t.players[0].set;
   t.hitDown(0); for(let j=0;j<60;j++)t.update(dt); t.hitUp(0); checks.charge=t.players[0].strokes===1 && t.players[0].ball.vx>300;
   t.reset();t.hitDown(1);t.hitDown(1);for(let j=0;j<30;j++)t.update(dt);t.hitUp(1);checks.blueShot=t.players[1].strokes===1;
   t.reset(); const golfer=t.players[1], ball=t.players[0].ball;
-  ball.x=golfer.x-26;ball.y=golfer.y;ball.vx=600;ball.vy=0;
+  t.players[0].x=1000;t.players[0].y=80;ball.x=golfer.x-26;ball.y=golfer.y;ball.vx=600;ball.vy=0;
   t.moveBall(ball,dt,0);checks.bonk=golfer.tumble&&golfer.vy<-250&&ball.vx<0;
   t.reset(); const a=t.players[0];a.grounded=false;a.coyote=0;a.jumps=2;a.wall=1;t.jump(a,0);checks.wallJump=a.vx<0&&a.vy<0;
   const resets=[];
   for(let i=0;i<10;i++) {
    t.loadLevel(i); const level=t.levels[i], player=t.players[0], b=player.ball, other=t.players[1];
-   for(let j=0;j<120;j++)t.update(dt);
-   if(Math.abs(player.x-level.start.x)>1||Math.abs(b.x-(level.start.x+28))>1||!player.grounded||!b.grounded)throw new Error('Unstable start '+level.name);
+   const spawnX=player.x,ballX=b.x;for(let j=0;j<120;j++)t.update(dt);
+   if(Math.abs(player.x-spawnX)>1||Math.abs(b.x-ballX)>1||!player.grounded||!b.grounded)throw new Error('Unstable start '+level.name);
    const h=level.hazards[0]; const otherX=other.x, ownBallX=b.x;
    player.x=h.x+h.w/2;player.y=h.y;player.vx=player.vy=0;
    t.movePlayer(player,dt,0);
@@ -68,13 +68,13 @@ try {
    for(let j=0;j<60;j++)t.movePlayer(player,dt,0);
    const delayed=player.falling>.4&&Math.abs(player.x-level.start.x)>1;
    for(let j=0;j<60;j++)t.movePlayer(player,dt,0);
-   const respawn=player.falling===0&&player.x===level.start.x&&other.x===otherX&&b.x===ownBallX;
+   const respawn=player.falling===0&&player.x===spawnX&&other.x===otherX&&b.x===ownBallX;
    b.x=h.x+h.w/2;b.y=h.y;b.vx=b.vy=0;t.moveBall(b,dt,0);
    const ballBegan=b.falling===1;
    for(let j=0;j<60;j++)t.moveBall(b,dt,0);
    const ballDelayed=b.falling>.4;
    for(let j=0;j<60;j++)t.moveBall(b,dt,0);
-   const ballRespawn=b.falling===0&&b.x===level.start.x+28&&player.x===level.start.x;
+   const ballRespawn=b.falling===0&&b.x===ballX&&player.x===spawnX;
    resets.push(began&&delayed&&respawn&&ballBegan&&ballDelayed&&ballRespawn);
    t.reset();
    const sand=t.platforms.find(s=>s.sand&&!s.slope); const sb=t.players[0].ball;
@@ -86,7 +86,7 @@ try {
    // Capture at each real hole and ensure repeated scoring cannot add extra points.
    t.reset();const hb=t.players[0].ball;hb.x=t.hole.x;hb.y=t.hole.y-9;hb.vx=hb.vy=0;
    t.moveBall(hb,dt,0);
-   if(t.winner!==0)throw new Error('Inaccessible goal '+level.name);
+   if(t.players[0].finishRank!==1)throw new Error('Inaccessible goal '+level.name);
    const score=t.scores[0];t.win(0);if(t.scores[0]!==score)throw new Error('Duplicate point');
   }
   checks.allResets=resets.every(Boolean);checks.tenPoints=t.scores[0]===10;
@@ -204,73 +204,39 @@ try {
  });
  console.log('Top boundary and tower gaps:',topAndPassages);for(const [name,passed]of Object.entries(topAndPassages))assert.equal(passed,true,name);
  const magnet=await page.evaluate(()=>{
-  const t=window.testGame,dt=1/120,out={};
-  const prepare=(owner=0,roof=false)=>{
-   t.loadLevel(1);t.players[1-owner].x=25;t.players[1-owner].y=516;
-   const p=t.players[owner],b=p.ball;p.x=250;p.y=516;p.grounded=true;
-   b.x=530;b.y=roof?251:531;b.vx=b.vy=0;b.resting=true;b.grounded=true;
-   return {p,b,key:owner===0?'KeyS':'ArrowDown'};
-  };
-  let {p,b,key}=prepare();t.keys.add(key);
-  for(let frame=0;frame<70;frame++)t.update(dt);
-  out.halfSecondVisible=p.magnetHold>=.5&&!p.magnetActive&&b.x===530;
-  t.keys.clear();t.update(dt);out.earlyRelease=p.magnetHold===0&&!p.magnetActive&&b.x===530;
-  ({p,b,key}=prepare());t.keys.add(key);for(let frame=0;frame<125;frame++)t.update(dt);
-  out.oneSecondPull=p.magnetActive&&b.x<530&&p.magnetSpeed<70;
-  const firstSpeed=p.magnetSpeed;for(let frame=0;frame<35;frame++)t.update(dt);
-  out.acceleration=p.magnetActive&&p.magnetSpeed>firstSpeed+80;
-  for(let frame=0;frame<250&&!p.tumble;frame++)t.update(dt);
-  out.ownerBonk=p.tumble&&p.vy<-250&&!p.magnetActive&&b.x<330;
-  // The same held key cannot repeatedly arm the magnet after an arrival.
-  p.tumble=false;p.vx=p.vy=0;p.x=250;p.y=516;
-  for(let frame=0;frame<260;frame++)t.update(dt);
-  out.oneRecallPerHold=!p.magnetActive&&p.magnetHold===0;
-  t.keys.clear();t.update(dt);out.releaseRearms=!p.magnetUsed;
-  ({p,b,key}=prepare());b.resting=false;b.vx=300;t.keys.add(key);for(let frame=0;frame<250;frame++){b.x=530;b.y=531;b.vx=300;b.vy=0;b.resting=false;t.update(dt);}
-  out.movingBallRejected=p.magnetHold===0&&!p.magnetActive;
-  ({p,b,key}=prepare());b.x=100;t.keys.add(key);for(let frame=0;frame<260;frame++)t.update(dt);
-  out.behindBallRejected=p.magnetHold===0&&!p.magnetActive&&b.x===100;
-  t.loadLevel(0);p=t.players[0];b=p.ball;p.x=800;p.y=206;b.x=1000;b.y=381;b.resting=true;
-  const ballDirect=Math.hypot(b.x-t.hole.x,b.y-t.hole.y), playerDirect=Math.hypot(p.x-t.hole.x,p.y-t.hole.y);
-  out.terrainRouteComparison=ballDirect<playerDirect&&t.routeDistance(b.x,b.y)>t.routeDistance(p.x,p.y+15);
-  t.keys.add('KeyS');for(let frame=0;frame<150;frame++)t.update(dt);
-  out.lowerFairwayRejected=p.magnetHold===0&&!p.magnetActive;
-  ({p,b,key}=prepare());const other=t.players[1];other.x=365;other.y=516;t.keys.add(key);
-  for(let frame=0;frame<300&&!other.tumble;frame++)t.update(dt);
-  out.opponentBonk=other.tumble&&other.vy<-250&&other.vx<0&&p.magnetActive;
-  b.x=p.x+100;b.y=p.y+6;out.magnetPointsRight=Math.abs(t.magnetAngle(p))<.01;
-  b.x=p.x-100;out.magnetPointsLeft=Math.abs(Math.abs(t.magnetAngle(p))-Math.PI)<.01;
-  b.x=p.x;b.y=p.y-94;out.magnetPointsUp=Math.abs(t.magnetAngle(p)+Math.PI/2)<.01;
-  // A phase recall travels through mountain rock, and release cannot leave it inside that rock.
-  ({p,b,key}=prepare(0,true));t.keys.add(key);let crossedRock=false;
-  for(let frame=0;frame<500;frame++){
-   t.update(dt);if(p.magnetActive&&!t.recallClear(b.x,b.y)){crossedRock=true;break;}
-  }
-  out.throughWall=crossedRock;
-  t.keys.clear();t.update(dt);out.safeWallRelease=!p.magnetActive&&t.recallClear(b.x,b.y);
-  ({p,b,key}=prepare(1));t.keys.add(key);for(let frame=0;frame<125;frame++)t.update(dt);
-  out.blueMagnet=p.magnetActive&&b.x<530;
-  t.reset();p=t.players[0];b=p.ball;t.hitDown(0);const oldAngle=p.angle;t.keys.add('KeyS');for(let frame=0;frame<300;frame++)t.update(dt);
-  out.aimUsesDown=p.angle<oldAngle&&!p.magnetActive&&p.magnetHold===0;
-  ({p,b,key}=prepare());b.x=900;b.y=531;t.trackBall(b);
-  const best=b.progress,history=b.visited.length;p.x=900;p.y=516;
-  // Water still resets the physical ball, but its explored progress survives.
-  b.x=30;b.y=625;b.resting=false;t.moveBall(b,dt,0);
-  for(let frame=0;frame<125;frame++)t.moveBall(b,dt,0);
-  out.waterKeepsTracker=b.progress===best&&b.visited.length>=history&&b.x<150;
-  t.keys.add(key);for(let frame=0;frame<125;frame++)t.moveBall(b,dt,0);
-  out.recoverAfterWater=p.magnetActive&&b.x>73;
-  t.keys.clear();t.releaseMagnet(p);b.x=250;b.y=531;b.vx=b.vy=0;b.resting=true;
-  t.trackBall(b);out.backwardBonkKeepsTracker=b.progress===best;
-  t.keys.add(key);for(let frame=0;frame<125;frame++)t.moveBall(b,dt,0);
-  out.recoverAfterBackwardBonk=p.magnetActive&&b.x>250;
-  t.keys.clear();t.releaseMagnet(p);p.x=1190;p.y=516;b.x=250;b.y=531;b.vx=b.vy=0;b.resting=true;
-  t.keys.add(key);for(let frame=0;frame<125;frame++)t.moveBall(b,dt,0);
-  out.unvisitedForwardRecallRejected=!p.magnetActive&&p.magnetHold===0;
-  t.loadLevel(1);out.replayClearsTracker=t.players.every(p=>!p.ball.progress&&p.ball.visited.length===0);
-  t.keys.clear();t.newMatch();return out;
+  const t=window.testGame,dt=1/120,out={};t.loadLevel(1);const p=t.players[0],b=p.ball;
+  b.x=900;b.y=531;b.resting=b.grounded=true;b.grace=0;t.trackBall(b);const tee={...b.progress};
+  b.x=1100;b.y=400;b.resting=false;b.grounded=false;t.trackBall(b);out.flightDoesNotCreateTee=b.progress.x===tee.x;
+  b.x=250;b.y=531;b.vx=b.vy=0;b.resting=b.grounded=true;t.trackBall(b);out.backwardStopPreservesTee=b.progress.x===tee.x;
+  p.x=250;p.y=516;p.vx=265;const px=p.x,py=p.y;t.keys.add('KeyS');t.keys.add('KeyD');
+  for(let j=0;j<30;j++)t.update(dt);out.fastActivation=p.magnetActive&&b.x>250;out.locked=p.x===px&&p.y===py;
+  t.jump(p,0);out.noJump=p.vy===0;
+  for(let j=0;j<500&&!p.magnetUsed;j++)t.update(dt);
+  for(let j=0;j<500&&p.magnetActive;j++)t.update(dt);
+  out.exactTee=b.x===tee.x&&b.y===tee.y&&b.resting;out.noOwnerBonk=!p.tumble;
+  t.keys.clear();t.update(dt);out.rearms=!p.magnetUsed;
+  t.respawnBall(b,0);for(let j=0;j<40;j++)t.update(dt);out.respawnKeepsTee=b.progress.x===tee.x;
+  t.keys.add('KeyS');for(let j=0;j<30;j++)t.update(dt);out.recallAfterWater=p.magnetActive;
+  t.keys.clear();t.releaseMagnet(p);out.safeRelease=t.recallClear(b.x,b.y);
+  t.newMatch();return out;
  });
  console.log('Magnet:',magnet);for(const [name,passed]of Object.entries(magnet))assert.equal(passed,true,name);
+ const safety=await page.evaluate(()=>{
+  const t=window.testGame;let spawns=0,impacts=0;
+  for(let l=0;l<10;l++){
+   t.loadLevel(l);const spots=t.startingPositions(4);
+   for(const spot of spots){if(!t.playerPoseClear(spot)||!t.recallClear(spot.x+22,spot.y+15))throw Error('Unsafe spawn '+l);spawns++;}
+   for(const s of t.platforms.filter(s=>s.slope))for(const dir of [-1,1])for(const vy of [-660,-100,0,660]){
+    const x=s.x+s.w/2,p={...t.players[0],x,y:t.surfaceY(s,x)-24,vx:dir*760,vy,tumble:true,grounded:false,falling:0};
+    if(!t.playerPoseClear(p))continue;
+    for(let n=0;n<24;n++){t.movePlayer(p,1/120,0);if(!p.falling&&!t.playerPoseClear(p))throw Error('Ramp clipping '+JSON.stringify({l,s,p}));if(p.falling)break;}
+    impacts++;
+   }
+  }
+  t.loadLevel(0);t.win(1);const other=t.players[0];const x=other.x;t.keys.add('KeyD');t.update(.05);t.keys.clear();if(other.x<=x)throw Error('First finish froze opponent');
+  t.win(0);t.hitDown(0);t.hitDown(1);t.loadLevel(1);if(t.players[1].x<=t.players[0].x)throw Error('Finish order not preserved');
+  t.newMatch();return {spawns,impacts};
+ });console.log('Four-player starts and airborne ramp impacts:',safety);
  const walls=await page.evaluate(()=>{
    const t=window.testGame;t.loadLevel(0);const saved=t.platforms.slice();let samples=0;
    try {
@@ -367,7 +333,7 @@ try {
      t.players.forEach(p=>{p.x=-1000;p.y=-1000});
      for(let step=0;step<1200;step++) {
       t.moveBall(b,dt,0);
-      if(t.winner===0){reached=true;winningPath=[...(state.route||[]),{x:Math.round(state.x),y:Math.round(state.y),dir,angle,power}];break;}
+      if(t.players[0].finishRank===1){reached=true;winningPath=[...(state.route||[]),{x:Math.round(state.x),y:Math.round(state.y),dir,angle,power}];break;}
       if(b.falling)break;
       if(step>25&&b.grounded&&b.resting) {
        const key=Math.round(b.x/20)+':'+Math.round(b.y/15);
@@ -404,7 +370,7 @@ try {
  for(const [name,passed]of Object.entries(courseCleanup))assert.equal(passed,true,name);
  // Complete the match through the actual next-level button, rather than loading directly.
  for(let i=0;i<10;i++) {
-  await page.evaluate(i=>{const t=window.testGame;t.win(i%2);t.render()},i);
+  await page.evaluate(i=>{const t=window.testGame;t.win(i%2);if(t.winner!==-1)throw Error("Advanced before everyone finished");t.win(1-i%2);t.hitDown(0);if(t.winner!==-1)throw Error("Advanced before everyone ready");t.hitDown(1);t.render()},i);
   if(i<9)assert.match(await page.locator('#winner').innerText(),/P[12] (RED|BLUE)/);
   if(i===9) assert.equal(await page.locator('#winner').innerText(),'MATCH TIED!');
   await page.click('#again');
@@ -417,11 +383,16 @@ try {
  }
  await page.evaluate(()=>{const t=window.testGame;t.loadLevel(0);t.jump(t.players[0],0);t.movePlayer(t.players[0],.1,0);t.jump(t.players[0],0);t.movePlayer(t.players[0],.15,0);t.render()});
  await page.screenshot({path:'artifacts/levels/double-jump-flip.png',fullPage:true});
- await page.evaluate(()=>{const t=window.testGame;t.loadLevel(1);const p=t.players[0],b=p.ball;p.x=250;p.y=516;b.x=530;b.y=531;b.resting=true;t.keys.add('KeyS');for(let frame=0;frame<70;frame++)t.update(1/120);t.render()});
+ await page.evaluate(()=>{const t=window.testGame;t.loadLevel(1);const p=t.players[0],b=p.ball;p.x=250;p.y=516;b.x=900;b.y=531;b.resting=b.grounded=true;t.trackBall(b);b.x=530;t.keys.add('KeyS');for(let frame=0;frame<70;frame++)t.update(1/120);t.render()});
  await page.screenshot({path:'artifacts/levels/magnet-ready.png',fullPage:true});
  await page.evaluate(()=>{const t=window.testGame;for(let frame=0;frame<140;frame++)t.update(1/120);t.render()});
  await page.screenshot({path:'artifacts/levels/magnet-pulling.png',fullPage:true});
  await page.evaluate(()=>{window.testGame.keys.clear();window.testGame.update(1/120)});
+ await page.evaluate(()=>{const t=window.testGame;t.keys.clear();t.reset();t.win(1);t.win(0);t.render()});
+ await page.screenshot({path:'artifacts/levels/ready.png',fullPage:true});
+ await page.locator('.ready-controls button').first().click();await page.locator('.ready-controls button').first().click();
+ assert.equal(await page.locator('#again').isEnabled(),true);
+ await page.click('#again');
  await page.keyboard.press('KeyH');assert.equal(await page.locator('#help-panel').isVisible(),true);await page.keyboard.press('KeyH');
  await page.setViewportSize({width:800,height:900});await page.screenshot({path:'artifacts/levels/small.png',fullPage:true});
  assert.deepEqual(errors,[]);

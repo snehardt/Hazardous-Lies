@@ -33,7 +33,7 @@ selectedColors.forEach((index,i)=>{
   applyColor();select.addEventListener('change',()=>{applyColor();keys.clear();canvas.focus();if(winner>=0)showWinner();render();});
 });
 type Ball = { revision?: number; x: number; y: number; vx: number; vy: number; grounded: boolean; grace: number; falling: number; resting: boolean; recallClear: { x: number; y: number } | null; progress: {x:number;y:number;distance:number} | null; visited: {x:number;y:number}[]; settle: number; trail: { x: number; y: number }[] };
-type Player = { revision?: number; x: number; y: number; vx: number; vy: number; grounded: boolean; jumps: number; wall: number; coyote: number; facing: number; set: boolean; charging: boolean; power: number; angle: number; tumble: boolean; recovery: number; rotation: number; flip: number; flipDirection: number; anim: number; swing: number; strokes: number; falling: number; magnetHold: number; magnetActive: boolean; magnetUsed: boolean; magnetSpeed: number; ball: Ball };
+type Player = { finishRank?: number; ready?: boolean; revision?: number; x: number; y: number; vx: number; vy: number; grounded: boolean; jumps: number; wall: number; coyote: number; facing: number; set: boolean; charging: boolean; power: number; angle: number; tumble: boolean; recovery: number; rotation: number; flip: number; flipDirection: number; anim: number; swing: number; strokes: number; falling: number; magnetHold: number; magnetActive: boolean; magnetUsed: boolean; magnetSpeed: number; ball: Ball };
 type Particle = { x: number; y: number; vx: number; vy: number; life: number; max: number; color: string; size: number };
 let levelIndex = 0;
 let platforms = levels[0].platforms, hole = levels[0].hole;
@@ -86,17 +86,40 @@ function clearNetworkPresentation() {
   acknowledged.fill(0);nextSnapshotAt=0;
 }
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
+let spawnOrder: number[] = [], spawnPositions: {x:number;y:number}[] = [];
+let orderedLevel = -1;
+function startingPositions(count: number) {
+  const start = levels[levelIndex].start, positions: {x:number;y:number}[] = [];
+  for(let x=Math.max(30,start.x-15);x<Math.min(W-42,start.x+230) && positions.length<count;x+=2) {
+    const y=start.y-24;
+    if(positions.some(p=>Math.abs(p.x-x)<44) || !playerPoseClear({x,y}) || !recallClear(x+22,y+15))continue;
+    if(!platforms.some(s=>x>=s.x && x+31<=s.x+s.w && Math.abs(surfaceY(s,x)-start.y)<.1 && Math.abs(surfaceY(s,x+22)-start.y)<.1))continue;
+    positions.push({x,y});
+  }
+  if(positions.length<count)throw new Error('Not enough safe tee positions');
+  return positions.reverse(); // Front is furthest along the opening fairway.
+}
 function reset(play = true) {
   if (online) { generation++; clearNetworkPresentation(); }
-  const { x: sx, y: sy } = levels[levelIndex].start;
-  players = Array.from({length:online ? onlineSlots.length : 2}, (_,i)=>sx+i*65).map((x, i) => ({ x, y: sy - 24, vx: 0, vy: 0, grounded: true, jumps: 0, wall: 0, coyote: .1, facing: 1, set: false, charging: false, power: 0, angle: Math.PI / 4, tumble: false, recovery: 0, rotation: 0, flip: 0, flipDirection: 1, anim: 0, swing: 0, strokes: 0, falling: 0, magnetHold: 0, magnetActive: false, magnetUsed: false, magnetSpeed: 0,
-    ball: { x: x + 28, y: sy - 9, vx: 0, vy: 0, grounded: true, grace: 0, falling: 0, resting: true, recallClear: null, progress:null, visited:[], settle: 0, trail: [] } }));
+  const count=online ? onlineSlots.length : 2;
+  if(orderedLevel!==levelIndex || spawnOrder.length!==count || !play) {
+    const previous=players.map((p,i)=>({i,rank:p.finishRank ?? Infinity})).sort((a,b)=>a.rank-b.rank);
+    spawnOrder=previous.length===count && previous.every(p=>Number.isFinite(p.rank)) && levelIndex!==0
+      ? previous.map(p=>p.i) : Array.from({length:count},(_,i)=>i);
+    if(levelIndex===0 || previous.some(p=>!Number.isFinite(p.rank)))for(let i=count-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[spawnOrder[i],spawnOrder[j]]=[spawnOrder[j],spawnOrder[i]];}
+    orderedLevel=levelIndex;
+  }
+  const slots=startingPositions(count);
+  spawnPositions=Array.from({length:count},(_,i)=>slots[spawnOrder.indexOf(i)]);
+  players = spawnPositions.map(({x,y}, i) => ({ x, y, vx: 0, vy: 0, grounded: true, jumps: 0, wall: 0, coyote: .1, facing: 1, set: false, charging: false, power: 0, angle: Math.PI / 4, tumble: false, recovery: 0, rotation: 0, flip: 0, flipDirection: 1, anim: 0, swing: 0, strokes: 0, falling: 0, magnetHold: 0, magnetActive: false, magnetUsed: false, magnetSpeed: 0,
+    ball: { x: x + 22, y: y + 15, vx: 0, vy: 0, grounded: true, grace: 0, falling: 0, resting: true, recallClear: null, progress:null, visited:[], settle: 0, trail: [] } }));
+  players.forEach(p=>trackBall(p.ball));
   onlineKeys.forEach(k=>k.clear());
   particles = []; winner = -1; started = play; paused = false; keys.clear();
   $('start').classList.toggle('hidden', play); $('win').classList.add('hidden');
   levelSelect.value = String(levelIndex);
   $('course-name').textContent = `HOLE ${levelIndex + 1} / 10`;
-  setHint('HOLD S / DOWN TO RECALL A RESTING BALL', 7);
+  setHint('HOLD S / DOWN TO RETURN TO YOUR BEST RESTING TEE', 7);
   updateHUD();
 }
 function loadLevel(index: number) {
@@ -105,19 +128,17 @@ function loadLevel(index: number) {
   platforms = levels[levelIndex].platforms; hole = levels[levelIndex].hole;
   reset(); canvas.focus();
 }
-function newMatch() { if (!canManage()) return; scores.fill(0); results.fill(null); loadLevel(0); }
+function newMatch() { if (!canManage()) return; scores.fill(0); results.fill(null); orderedLevel=-1; players.forEach(p=>{p.finishRank=undefined;}); loadLevel(0); }
 function respawnPlayer(p: Player, i: number) {
   p.revision = (p.revision ?? 0) + 1;
   releaseMagnet(p);
-  const start = levels[levelIndex].start;
-  Object.assign(p, { x: start.x + i * 65, y: start.y - 24, vx: 0, vy: 0, grounded: true,
+  Object.assign(p, { x: spawnPositions[i].x, y: spawnPositions[i].y, vx: 0, vy: 0, grounded: true,
     jumps: 0, wall: 0, coyote: .1, facing: 1, set: false, charging: false, power: 0,
     tumble: false, recovery: 0, rotation: 0, flip: 0, falling: 0, magnetHold: 0, magnetActive: false, magnetSpeed: 0 });
 }
 function respawnBall(b: Ball, i: number) {
   b.revision = (b.revision ?? 0) + 1;
-  const start = levels[levelIndex].start;
-  Object.assign(b, { x: start.x + i * 65 + 28, y: start.y - 9, vx: 0, vy: 0,
+  Object.assign(b, { x: spawnPositions[i].x + 22, y: spawnPositions[i].y + 15, vx: 0, vy: 0,
     grounded: true, grace: .2, falling: 0, resting: true, settle: 0, trail: [] });
   players[i].set = players[i].charging = false;
   players[i].magnetHold = 0; players[i].magnetActive = false;
@@ -153,7 +174,8 @@ function burst(x: number, y: number, color: string, count = 12, force = 150) {
 }
 function hitDown(i: number) {
   const p = players[i], b = p.ball;
-  if (p.tumble || p.falling || b.falling || p.magnetActive) return;
+  if(p.finishRank){if(players.every(p=>p.finishRank)){p.ready=true;completeReady();updateHUD();}return;}
+  if (magnetLocked(p,i) || p.tumble || p.falling || b.falling || p.magnetActive) return;
   p.magnetHold = 0;
   if (!p.set) {
     if (Math.hypot(p.x - b.x, p.y - (b.y - 16)) > 92 || Math.hypot(b.vx, b.vy) > 75) {
@@ -176,7 +198,7 @@ function hitUp(i: number) {
   updateHUD();
 }
 function jump(p: Player, i: number) {
-  if (p.set || p.tumble) return;
+  if (p.finishRank || magnetLocked(p,i) || p.set || p.tumble) return;
   if (p.wall && !p.grounded && p.coyote <= 0) {
     p.vx = -p.wall * 390; p.vy = -490; p.facing = -p.wall; p.jumps = 1;
     burst(p.x + p.wall * 14, p.y, '#eff3ce', 8, 90);
@@ -257,7 +279,12 @@ function roundedContact(x: number, y: number, radius: number, s: Platform) {
   const face = distances.indexOf(Math.min(...distances));
   return { nx: face === 0 ? -1 : face === 1 ? 1 : 0, ny: face === 2 ? -1 : face === 3 ? 1 : 0, depth: radius + distances[face] };
 }
+function magnetLocked(p: Player, i: number) {
+  return !p.set && !p.tumble && !p.falling && (p.magnetActive || p.magnetHold>0 || inputKeys(i).has(inputControls(i).down));
+}
 function movePlayer(p: Player, dt: number, i: number) {
+  if(p.finishRank)return;
+  if(magnetLocked(p,i)){p.vx=p.vy=0;return;}
   // Sweep in small increments even during a high-speed bonk or long simulation step.
   const steps = Math.max(1, Math.ceil((Math.hypot(p.vx, p.vy) + G * dt + 265) * dt / 4));
   for (let step = 0; step < steps; step++) integratePlayer(p, dt / steps, i);
@@ -272,7 +299,8 @@ function integratePlayer(p: Player, dt: number, i: number) {
   }
   if (inHazard(p.x, p.y, 24)) { beginFall(p); return; }
   const c = inputControls(i), keys = predictionKeys ?? inputKeys(i), wasGrounded = p.grounded;
-  const oldX = p.x;
+  const oldX = p.x, startY=p.y;
+  const beganClear=playerPoseClear(p);
   p.swing = Math.max(0, p.swing - dt); p.anim += dt * (Math.abs(p.vx) > 30 ? 12 : 3);
   if (p.set && !p.tumble) {
     if (p.ball.falling || Math.hypot(p.ball.vx, p.ball.vy) > 90 || Math.hypot(p.x - p.ball.x, p.y - (p.ball.y - 16)) > 130) { p.set = false; p.charging = false; }
@@ -315,13 +343,16 @@ function integratePlayer(p: Player, dt: number, i: number) {
     const top = surfaceY(s, clamp(p.x, s.x, s.x + s.w)), previousTop = surfaceY(s, clamp(oldX, s.x, s.x + s.w));
     const bottom = platformBottom(s,p.x);
     const followsSupport = p.vy >= 0 && !!support && Math.abs(oldFoot - previousTop) <= 5 && Math.abs(top - oldFoot) <= Math.abs(p.x - oldX) * 3 + 5;
-    const crossesTop = p.vy >= 0 && oldFoot <= Math.max(top, previousTop) + 2 && p.y + 24 >= top;
+    const crossesTop = oldFoot <= previousTop + 2 && p.y + 24 >= top;
     // Recover tiny overlaps at seams or after an impact instead of losing the floor forever.
     const shallowOverlap = p.vy >= 0 && oldFoot > top && oldFoot <= top + 8 && oldY - 24 < top && p.y + 24 >= top;
     if (followsSupport || crossesTop || shallowOverlap) landing = Math.min(landing, top);
-    else if (p.vy < 0 && oldY - 24 >= bottom - .5 && p.y - 24 <= bottom) { p.y = bottom + 24; p.vy = 0; }
+    else if (oldY - 24 >= platformBottom(s,oldX) - .5 && p.y - 24 <= bottom) { p.y = bottom + 24; p.vy = 0; }
   }
   if (landing < Infinity) { p.y = landing - 24; p.vy = 0; p.grounded = true; }
+  // Reject a residual corner/underside overlap before it can become a deep penetration.
+  // This also covers horizontal entry into a sloping underside at a jump apex.
+  if(beganClear && !playerPoseClear(p)){p.x=oldX;p.y=startY;p.vx=p.vy=0;}
   // Include the cap and rotating body in the screen boundary.
   const topRadius = p.tumble || p.flip > 0 ? 38 : 30;
   if (p.y < topRadius) { p.y = topRadius; p.vy = Math.max(0,p.vy); }
@@ -335,6 +366,7 @@ function integratePlayer(p: Player, dt: number, i: number) {
   if (inHazard(p.x, p.y, 24)) beginFall(p);
 }
 function moveBall(b: Ball, dt: number, owner: number) {
+  if(players[owner].finishRank)return;
   if (b.falling > 0) {
     b.falling = Math.max(0, b.falling - dt); b.vy += 250 * dt;
     b.y = Math.min(H - 12, b.y + b.vy * dt); b.trail = [];
@@ -350,7 +382,7 @@ function moveBall(b: Ball, dt: number, owner: number) {
   }
   // Fast shots must not tunnel through thin shelves or the water surface.
   const steps = Math.max(1, Math.ceil((Math.hypot(b.vx, b.vy) + G * dt) * dt / 5));
-  for (let j = 0; j < steps && !b.falling && winner < 0; j++) integrateBall(b, dt / steps, owner);
+  for (let j = 0; j < steps && !b.falling && !players[owner].finishRank && winner < 0; j++) integrateBall(b, dt / steps, owner);
 }
 function integrateBall(b: Ball, dt: number, owner: number) {
   if (inHazard(b.x, b.y, 9)) { beginFall(b); return; }
@@ -382,7 +414,7 @@ function integrateBall(b: Ball, dt: number, owner: number) {
     if (ny < -.65 && Math.abs(b.vy) < 35) b.grounded = true;
   }
   players.forEach((p, i) => {
-    if (owner === i && b.grace > 0 || p.tumble || p.falling) return;
+    if (p.finishRank || owner === i && b.grace > 0 || p.tumble || p.falling) return;
     // Feet and bodies never displace a slow or resting ball. Only travelling balls bonk.
     const speed = Math.hypot(b.vx, b.vy);
     if (b.resting || speed < 120) return;
@@ -479,13 +511,12 @@ function routeDistance(x: number, y: number) {
   return distance;
 }
 function trackBall(b: Ball) {
-  if (!recallClear(b.x,b.y)) return;
-  const last=b.visited[b.visited.length-1];
-  if(last && Math.hypot(last.x-b.x,last.y-b.y)<24) return;
-  const distance=routeDistance(b.x,b.y);
-  if(!Number.isFinite(distance)) return;
+  // A tee is created only by a settled shot, never by flight or a hazard reset.
+  if(!b.resting || !b.grounded || b.grace>0 || !recallClear(b.x,b.y))return;
+  if(b.visited.some(p=>Math.hypot(p.x-b.x,p.y-b.y)<1))return;
   b.visited.push({x:b.x,y:b.y});if(b.visited.length>512)b.visited.shift();
-  if(!b.progress || distance<b.progress.distance) b.progress={x:b.x,y:b.y,distance};
+  const distance=routeDistance(b.x,b.y);
+  if(Number.isFinite(distance) && (!b.progress || distance<b.progress.distance-1))b.progress={x:b.x,y:b.y,distance};
 }
 function magnetAngle(p: Player) { return Math.atan2(p.ball.y - (p.y + 6), p.ball.x - p.x); }
 function releaseMagnet(p: Player) {
@@ -508,19 +539,16 @@ function moveMagnet(p: Player, dt: number, owner: number) {
   if (!p.magnetActive) {
     if (p.magnetUsed) return false;
     if (Math.hypot(b.vx, b.vy) > 3 || !b.resting) { p.magnetHold = 0; return false; }
-    const ballRoute = routeDistance(b.x,b.y), playerRoute = routeDistance(p.x,p.y+15);
-    const ahead = ballRoute + 8 < playerRoute;
-    const recovering = !!b.progress && b.progress.distance + 8 < ballRoute && playerRoute + 8 >= b.progress.distance;
-    if (!Number.isFinite(ballRoute) || !Number.isFinite(playerRoute) || (!ahead && !recovering)) { p.magnetHold = 0; return false; }
+    if (!b.progress || Math.hypot(b.x-b.progress.x,b.y-b.progress.y)<2) { p.magnetHold=0;return false; }
     p.magnetHold += dt;
-    if (p.magnetHold < 1) return false;
-    p.magnetActive = true; p.magnetUsed = true; p.magnetSpeed = 30;
+    if (p.magnetHold < .15) return false;
+    p.magnetActive = true; p.magnetUsed = true; p.magnetSpeed = 160;
     b.resting = b.grounded = false; b.settle = 0; b.grace = 0;
     b.recallClear = {x:b.x,y:b.y};
-    setHint('MAGNET ON — RELEASE BEFORE THE BONK!'); beep(300,.12,'triangle');
+    setHint('RECALLING TO YOUR BEST TEE'); beep(300,.12,'triangle');
   }
   p.magnetHold += dt; p.magnetSpeed = Math.min(1100, p.magnetSpeed + 360 * dt);
-  const dx=p.x-b.x, dy=p.y-b.y, distance=Math.hypot(dx,dy), speed=p.magnetSpeed;
+  const dx=b.progress!.x-b.x, dy=b.progress!.y-b.y, distance=Math.hypot(dx,dy), speed=p.magnetSpeed;
   const travel=Math.min(distance, speed*dt);
   b.vx=dx/Math.max(distance,.01)*speed; b.vy=dy/Math.max(distance,.01)*speed;
   // Sample clear locations even when callers advance more than one physics tick.
@@ -531,7 +559,7 @@ function moveMagnet(p: Player, dt: number, owner: number) {
     // The pull keeps its direction through a bonk; only the other golfer is launched.
     for (let i=0;i<players.length;i++) {
       const other=players[i];
-      if(i===owner || other.tumble || other.falling || speed<120 || !recallClear(b.x,b.y)) continue;
+      if(i===owner || other.finishRank || other.tumble || other.falling || speed<120 || !recallClear(b.x,b.y)) continue;
       const cx=clamp(b.x,other.x-10,other.x+10), cy=clamp(b.y,other.y-18,other.y+20);
       if(Math.hypot(b.x-cx,b.y-cy)>15) continue;
       other.vx=clamp(b.vx*.9,-760,760); other.vy=-clamp(speed*.65,290,660);
@@ -541,20 +569,10 @@ function moveMagnet(p: Player, dt: number, owner: number) {
     }
   }
   b.trail.push({x:b.x,y:b.y}); if(b.trail.length>13)b.trail.shift();
-  if(distance-travel<=24) {
-    const clear=b.recallClear;
-    // Dock beside the original footing, never into a ramp or wall.
-    const candidates=[{x:p.x+p.facing*28,y:p.y+15},{x:p.x-p.facing*28,y:p.y+15},{x:p.x,y:p.y+15}];
-    const dock=candidates.find(c=>recallClear(c.x,c.y))??clear;
-    if(dock){b.x=dock.x;b.y=dock.y;}
-    b.vx=b.vy=0;b.resting=false;b.grace=.3;b.recallClear=null;
+  if(distance-travel<=.01) {
+    b.x=b.progress!.x;b.y=b.progress!.y;b.vx=b.vy=0;b.resting=b.grounded=true;b.grace=0;b.recallClear=null;
     p.magnetHold=0;p.magnetActive=false;p.magnetSpeed=0;
-    if(speed>=160) {
-      p.vx=clamp(dx/Math.max(distance,.01)*speed*.65,-700,700);
-      p.vy=-clamp(speed*.65,290,660);p.grounded=false;p.tumble=true;
-      p.recovery=0;p.rotation=.3;p.flip=0;p.set=p.charging=false;
-      burst(p.x,p.y,colors[owner],22,220);setHint('MAGNET BONK!');beep(120,.18,'sawtooth');
-    } else {burst(b.x,b.y,colors[owner],8,80);setHint('BALL RECALLED');}
+    burst(b.x,b.y,colors[owner],8,80);setHint('BALL RECALLED TO TEE');
   }
   return true;
 }
@@ -563,29 +581,46 @@ function checkCup(b: Ball, owner: number) {
 }
 
 function win(i: number) {
-  if (winner >= 0) return;
-  winner = i; keys.clear(); players.forEach(p => { p.charging = false; releaseMagnet(p); });
-  const previous = results[levelIndex];
-  if (previous !== null) scores[previous]--;
-  results[levelIndex] = i; scores[i]++;
-  const complete = results.every(r => r !== null);
-  showWinner();
-  $('again').textContent = complete ? 'NEW MATCH' : 'NEXT LEVEL ▶';
-  $('win').classList.remove('hidden'); burst(hole.x, hole.y - 35, colors[i], 65, 370); beep(800, .4, 'triangle'); updateHUD();
+  const p=players[i];if(p.finishRank)return;
+  p.finishRank=players.filter(p=>p.finishRank).length+1;
+  p.ready=false;p.charging=p.set=false;releaseMagnet(p);p.vx=p.vy=p.ball.vx=p.ball.vy=0;
+  if(p.finishRank===1){const previous=results[levelIndex];if(previous!==null)scores[previous]--;results[levelIndex]=i;scores[i]++;}
+  burst(hole.x,hole.y-35,colors[i],65,370);beep(800,.4,'triangle');updateHUD();
+}
+function completeReady() {
+  if(players.every(p=>p.finishRank && p.ready))winner=players.findIndex(p=>p.finishRank===1);
+}
+function finishUI() {
+  if(!players.length || !players.every(p=>p.finishRank))return;
+  showWinner();$('win').classList.remove('hidden');
+  $('win-detail').textContent=players.map((p,i)=>playerName(i)+': '+(p.ready?'READY':'WAITING')).join(' · ');
+  $('again').textContent=results.every(r=>r!==null)?'NEW MATCH':'NEXT LEVEL ▶';
+  ($('again') as HTMLButtonElement).disabled=winner<0 || !canManage();
+  let ready=$('win').querySelector<HTMLDivElement>('.ready-controls');
+  if(!ready){ready=document.createElement('div');ready.className='ready-controls';$('win-detail').after(ready);}
+  const readyState=players.map(p=>!!p.ready).join(',')+colors.join(',')+online;
+  if(ready.dataset.state===readyState)return;
+  ready.dataset.state=readyState;
+  ready.replaceChildren(...players.flatMap((p,i)=>{
+    if(p.ready || online && room?.players[onlineSlots[i]]?.id!==session?.id)return [];
+    const button=document.createElement('button');button.className='pixel-button';button.textContent=online?'READY':playerName(i)+' READY';
+    button.onclick=()=>{if(online){sendInput('swing',true);sendInput('swing',false);}else hitDown(i);};return [button];
+  }));
 }
 function showWinner() {
-  const complete=results.every(r=>r!==null), best=Math.max(...scores), leader=complete?scores.indexOf(best):winner;
+  const complete=results.every(r=>r!==null), best=Math.max(...scores), leader=complete?scores.indexOf(best):players.findIndex(p=>p.finishRank===1);
   $('winner').textContent=complete&&scores.filter(s=>s===best).length>1?'MATCH TIED!':`${playerName(leader)} ${complete?'TAKES THE MATCH!':'WINS THE HOLE!'}`;
   $('winner').style.color=colors[leader];
   $('win-detail').textContent='';
 }
 function updateHUD() {
+  finishUI();
   if (online) {
-    $('online-score').replaceChildren(...players.map((p,i)=>{ const el=document.createElement('span'); el.style.borderColor=colors[i]; el.textContent=`P${onlineSlots[i]+1}${room?.players[onlineSlots[i]]?.id===session?.id ? " (YOU)" : ""} · ${scores[i]} POINTS · ${p.strokes} SHOTS`; return el; })); return;
+    $('online-score').replaceChildren(...players.map((p,i)=>{ const el=document.createElement('span'); el.style.borderColor=colors[i]; el.textContent=`P${onlineSlots[i]+1}${room?.players[onlineSlots[i]]?.id===session?.id ? " (YOU)" : ""} · ${scores[i]} POINTS · ${p.finishRank ? 'FINISHED #'+p.finishRank : p.strokes+' SHOTS'}`; return el; })); return;
   }
   players.forEach((p, i) => {
     $(`p${i + 1}-score`).textContent = `${scores[i]} POINT${scores[i] === 1 ? '' : 'S'}`;
-    $(`p${i + 1}-state`).textContent = winner === i ? 'WINNER' : p.falling || p.ball.falling ? 'RESETTING...' : p.tumble ? 'AIRTIME!' : p.magnetActive ? 'MAGNET!' : p.magnetHold >= .5 ? 'MAGNET READY' : p.charging ? 'CHARGING' : p.set ? 'AIMING' : `${p.strokes} SHOTS`;
+    $(`p${i + 1}-state`).textContent = p.finishRank ? 'FINISHED #'+p.finishRank : p.falling || p.ball.falling ? 'RESETTING...' : p.tumble ? 'AIRTIME!' : p.magnetActive ? 'MAGNET!' : p.magnetHold > 0 ? 'MAGNET READY' : p.charging ? 'CHARGING' : p.set ? 'AIMING' : `${p.strokes} SHOTS`;
   });
 }
 function update(dt: number) {
@@ -599,7 +634,7 @@ function update(dt: number) {
     players.forEach((p, i) => { if (winner < 0) moveBall(p.ball, dt, i); });
     for (let ai=0;ai<players.length;ai++) for(let bi=ai+1;bi<players.length;bi++) {
     const a = players[ai].ball, b = players[bi].ball, dx = b.x - a.x, dy = b.y - a.y, d = Math.hypot(dx, dy);
-    if (winner < 0 && !players.some(p => p.magnetActive) && !a.falling && !b.falling && (!a.resting || !b.resting) && Math.max(Math.hypot(a.vx,a.vy), Math.hypot(b.vx,b.vy)) > 120 && d < 18 && d > .001) {
+    if (!players[ai].finishRank && !players[bi].finishRank && winner < 0 && !players.some(p => p.magnetActive) && !a.falling && !b.falling && (!a.resting || !b.resting) && Math.max(Math.hypot(a.vx,a.vy), Math.hypot(b.vx,b.vy)) > 120 && d < 18 && d > .001) {
       const nx = dx / d, ny = dy / d, overlap = (18 - d) / 2;
       a.x -= nx * overlap; a.y -= ny * overlap; b.x += nx * overlap; b.y += ny * overlap;
       const velocity = (b.vx - a.vx) * nx + (b.vy - a.vy) * ny;
@@ -711,14 +746,14 @@ function drawPlayer(p: Player, i: number) {
   rect(-13, -5 + armLift, 5, 14, outline); rect(-12, -3 + armLift, 4, 7, color); rect(-12, 4 + armLift, 4, 5, '#e5c598');
   rect(8, -5 + armLift, 5, 13, outline); rect(9, -3 + armLift, 4, 6, color); rect(9, 3 + armLift, 5, 6, '#eeeccf');
   ctx.save(); ctx.translate(12, 6 + armLift);
-  if (p.magnetHold >= .5) {
+  if (p.magnetHold > 0) {
     ctx.restore();
   } else {
   ctx.rotate(p.swing > 0 ? -1.7 + (1 - p.swing / .28) * 3 : p.charging ? -p.power * 1.4 : p.set ? -.4 : -.18);
   rect(0, -4, 3, 27, '#32483e'); rect(1, 0, 2, 22, '#c1cbbb'); rect(0, -5, 3, 7, '#5d6d58'); rect(0, 21, 10, 5, '#32483e'); rect(2, 21, 8, 3, '#d4dbca'); ctx.restore();
   }
   ctx.restore();
-  if (p.magnetHold >= .5) {
+  if (p.magnetHold > 0) {
     const angle=magnetAngle(p);
     ctx.save();ctx.translate(p.x+Math.cos(angle)*12,p.y+6+Math.sin(angle)*12);ctx.rotate(angle);
     rect(-2,-14,8,28,outline);rect(-2,-14,28,8,outline);rect(-2,6,28,8,outline);
@@ -752,9 +787,9 @@ function drawAim(p: Player, i: number) {
 function drawBall(b: Ball, i: number) {
   if(b.progress && Math.hypot(b.progress.x-b.x,b.progress.y-b.y)>40) {
     ctx.save();ctx.globalAlpha=.4;ctx.strokeStyle=colors[i];ctx.lineWidth=2;ctx.setLineDash([3,4]);
-    ctx.beginPath();ctx.arc(b.progress.x,b.progress.y,12,0,Math.PI*2);ctx.stroke();ctx.restore();
+    ctx.strokeRect(b.progress.x-16,b.progress.y-10,32,20);ctx.restore();
   }
-  ctx.globalAlpha=.2;for(const point of b.visited) rect(point.x-1,point.y-1,2,2,colors[i]);ctx.globalAlpha=1;
+
   b.trail.forEach((p, j) => { ctx.globalAlpha = j / b.trail.length * .28; ellipse(p.x, p.y, 5, 5, colors[i]); }); ctx.globalAlpha = 1;
   ellipse(b.x, b.y + 8, 10, 3, '#243d322b'); ellipse(b.x, b.y, 9, 9, '#2d4438'); ellipse(b.x, b.y - 1, 7.5, 7.5, colors[i]);
   rect(b.x - 4, b.y - 5, 3, 3, '#fff7dc'); rect(b.x + 2, b.y - 2, 2, 2, palette[selectedColors[i]].dark); rect(b.x - 2, b.y + 3, 2, 2, palette[selectedColors[i]].dark);
@@ -776,7 +811,7 @@ function render(renderPlayers = players) {
   drawHole(); renderPlayers.forEach(drawAim);
   renderPlayers.forEach((p, i) => { ctx.globalAlpha = p.falling ? Math.max(.15, p.falling) : 1; drawPlayer(p, i); ctx.globalAlpha = 1; });
   renderPlayers.forEach((p, i) => {
-    if (winner !== i) { ctx.save(); drawBall(p.ball, i); ctx.globalAlpha = 1;
+    if (!p.finishRank) { ctx.save(); drawBall(p.ball, i); ctx.globalAlpha = 1;
       if (p.ball.falling) { ctx.strokeStyle = colors[i]; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(p.ball.x, p.ball.y, 13 + (1 - p.ball.falling) * 10, 0, Math.PI * 2); ctx.stroke(); }
       ctx.restore(); }
   });

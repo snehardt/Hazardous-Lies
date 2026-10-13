@@ -57,9 +57,15 @@ try {
   assert.equal(await a.evaluate(()=>window.onlineTest.players[0].strokes),0);
   assert.ok(Math.abs(await a.evaluate(()=>window.onlineTest.aims[1].x)-768)<2);
   await b.waitForFunction(()=>window.onlineTest.players[1].strokes===1);
-  await a.evaluate(()=>window.onlineTest.win(3));await b.waitForFunction(()=>window.onlineTest.winner===3);
+  await a.evaluate(()=>window.onlineTest.win(3));
+  await b.waitForFunction(()=>window.onlineTest.players[3].finishRank===1);
+  assert.equal(await b.evaluate(()=>window.onlineTest.winner),-1);
+  await a.evaluate(()=>[1,0,2].forEach(i=>window.onlineTest.win(i)));
+  for(const p of pages)await p.locator('.ready-controls button').click();
+  await b.waitForFunction(()=>window.onlineTest.winner===3);
   assert.match(await b.locator('#winner').textContent(),/P4/);
   await a.click('#again');await b.waitForFunction(()=>window.onlineTest.level===1);
+  assert.equal(await a.evaluate(()=>{const p=window.onlineTest.players;return p[3].x>p[1].x&&p[1].x>p[0].x&&p[0].x>p[2].x}),true);
   await a.screenshot({path:'artifacts/online-game.png'});
   // Long recall history exceeds PeerJS JSON's message limit; snapshots use binary chunking.
   await a.evaluate(()=>{for(const p of window.onlineTest.players)p.ball.visited=Array.from({length:512},(_,i)=>({x:i+0.123456789,y:500.987654321}));});
