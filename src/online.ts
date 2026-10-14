@@ -5,7 +5,7 @@ export type { Room } from './protocol.js';
 declare global { interface Window { HAZARDOUS_PEER_OPTIONS?: PeerOptions } }
 type Reply=(value:{error?:string;ok?:boolean})=>void;
 type Link={control:DataConnection;state?:DataConnection;seen:number;window:number;count:number};
-export async function connectOnline(onRoom:(room:Room)=>void,onInput:(data:any)=>void,onSnapshot:(data:any)=>void,onLost:()=>void) {
+export async function connectOnline(onRoom:(room:Room)=>void,onInput:(data:any)=>void,onSnapshot:(data:any)=>void,onLost:()=>void,onReady:(ready:boolean)=>void=()=>{}) {
   const status=document.getElementById('online-status')!;
   let peer:Peer,closed=false,current:Room|null=null,hostLink:Link|undefined;
   let joining:Reply|undefined,joinTimer:ReturnType<typeof setTimeout>|undefined,attempts=0;
@@ -40,7 +40,7 @@ export async function connectOnline(onRoom:(room:Room)=>void,onInput:(data:any)=
   }
   function watch(connection:DataConnection,onData:(data:any)=>void,onClose:()=>void) {
     pendingConnections.add(connection);
-    const timeout=later(()=>{pendingConnections.delete(connection);if(!connection.open){connection.close();onClose();}},12000);
+    const timeout=later(()=>{pendingConnections.delete(connection);if(!connection.open){onClose();connection.close();}},25000);
     connection.on('open',()=>{pendingConnections.delete(connection);clearTimeout(timeout);timers.delete(timeout);});
     connection.on('data',data=>{if(!closed)onData(data);});
     connection.on('close',()=>{pendingConnections.delete(connection);clearTimeout(timeout);timers.delete(timeout);if(!closed)onClose();});
@@ -77,31 +77,36 @@ export async function connectOnline(onRoom:(room:Room)=>void,onInput:(data:any)=
   function initialize() {
     peer=new Peer(PROTOCOL+roomCode(),window.HAZARDOUS_PEER_OPTIONS);
     const active=peer;
-    peer.on('open',()=>{if(closed || peer!==active)return;status.textContent='Connected. Create a room or join a six-character code.';});
+    const startup=later(()=>{if(!closed && peer===active && !peer.open){status.textContent='Cannot reach the connection service. Check your internet or VPN, then click Retry Connection.';onReady(false);}},20000);
+    peer.on('open',()=>{if(closed || peer!==active)return;clearTimeout(startup);timers.delete(startup);status.textContent='Connected. Create a room or join a six-character code.';onReady(true);});
     peer.on('connection',connection=>{if(closed || peer!==active)connection.close();else accept(connection);});
     peer.on('disconnected',()=>{
       if(closed || peer!==active)return;
+      onReady(false);
       status.textContent='Signaling disconnected. Existing WebRTC connections can keep playing; reconnecting…';
       later(()=>{if(!closed && peer===active && peer.disconnected && !peer.destroyed)peer.reconnect();},3000);
     });
     peer.on('error',error=>{
       if(closed || peer!==active)return;
+      clearTimeout(startup);timers.delete(startup);
       if(error.type==='unavailable-id' && !current && ++attempts<4){peer.destroy();initialize();return;}
       if(error.type==='peer-unavailable' && joining){loseHost('Room not found. Check the six-character code and that the host is online.');return;}
-      if(joining){loseHost('Could not connect directly to the host. The network may require a TURN relay.');return;}
-      status.textContent=`Peer connection error (${error.type}). Check your network, then return to the menu and retry.`;
+      if(joining){loseHost(`Could not reach the host (${error.type}). Keep the host tab open, then retry. If this repeats, try another network or turn off your VPN.`);return;}
+      if(!peer.open)onReady(false);
+      status.textContent=`Connection service error (${error.type}). Check your internet or VPN, then click Retry Connection.`;
     });
   }
   initialize();
   const heartbeat=setInterval(()=>{
     if(closed)return;
     const now=performance.now();
-    if(hostLink){if(now-hostLink.seen>15000)loseHost('Host connection lost. Create or join a new room.');else send(hostLink.control,{type:'ping'});}
+    if(hostLink && current){if(now-hostLink.seen>15000)loseHost('Host connection lost. Create or join a new room.');else send(hostLink.control,{type:'ping'});}
     for(const [id,link] of guests){if(now-link.seen>15000)dropGuest(id,link);else send(link.control,{type:'ping'});}
   },2000);
   return {
     get id(){return peer.id;},
     get connected(){return !closed && (peer.open || !!current);},
+    get signalingReady(){return !closed && peer.open;},
     sendInput(input:unknown){send(hostLink?.control,{type:'input',input});},
     sendSnapshot(state:any){
       if(!current || current.host!==peer.id || current.phase!=='playing' || state.epoch!==current.epoch)return;
@@ -146,8 +151,8 @@ export async function connectOnline(onRoom:(room:Room)=>void,onInput:(data:any)=
               if(data?.type==='snapshot' && current?.phase==='playing' && data.state?.epoch===current.epoch){link.seen=performance.now();onSnapshot(data.state);}
             },()=>{if(hostLink===link)loseHost('Game channel closed. Create or join a new room.');});
           }
-        },()=>{if(hostLink===link)loseHost('Host left or disconnected. Create or join a new room.');});
-        joinTimer=later(()=>{if(hostLink===link && joining)loseHost('Connection timed out. Check the code; restrictive networks may need a TURN relay.');},12000);
+        },()=>{if(hostLink===link)loseHost(joining?'Could not complete the connection. Keep the host tab open and retry. If it keeps failing, try home Wi-Fi or a phone hotspot.':'Host left or disconnected. Create or join a new room.');});
+        joinTimer=later(()=>{if(hostLink===link && joining)loseHost('Connection timed out. Keep the host tab open and retry. Try home Wi-Fi or a phone hotspot if your network blocks multiplayer.');},25000);
       } else reply({error:'Unknown room request.'});
     },
     disconnect(){

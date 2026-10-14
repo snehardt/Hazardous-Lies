@@ -82,9 +82,11 @@ Separate tower checks verify all three intended shelf lifts and their clearances
 Play at **[Hazardous Lies on GitHub Pages](https://snehardt.github.io/Hazardous-Lies/)**. Both local and online play work on this static site. No Render service, Socket.IO relay, or locally running Node server is needed to play.
 
 1. Both players open the link and choose **Play Online**.
-2. Wait for **Connected**, then one player chooses **Create Room**.
-3. Share the **six-character room code** with up to three guests.
-4. Guests enter that code and choose **Join Room**. The host can start once all game channels are ready.
+2. Once connected, one player chooses **Create Room**.
+3. Choose **Copy Invite Link** and share it with up to three guests. Keep the host's game tab open.
+4. Opening the invite automatically connects and joins the room. Guests can also paste the invite link or six-character code into **Room Code or Invite Link** and press Enter. The host can start once all game channels are ready.
+
+If connecting fails, use **Retry Connection** without returning to the main menu. Joining waits up to 25 seconds for slower networks. A room disappears when its host leaves; ask for a fresh invite after the host reconnects.
 
 Every online client controls only its assigned golfer: **A/D** move, **W** jump/double jump/wall jump, **S** recalls. Aim with the mouse; hold left click to charge and release to swing near your own slow/stationary ball. The host selects arenas, restarts, and advances levels. Local multiplayer controls, ball physics and level layouts are unchanged.
 
@@ -96,7 +98,9 @@ The host owns the four-player lobby, assigns slots from channel identities, vali
 
 A guest leaving returns everyone else to the lobby and frees that slot. The host starts a new match after any replacements join. **If the host leaves, the room ends** and guests can create or join another room. There is no automatic host migration. Connection timeouts and heartbeat cleanup handle broken peers, and leaving closes channels, signaling and timers. The host must keep the game tab visible; background browser throttling can still affect gameplay.
 
-WebRTC cannot connect directly through every firewall or NAT. The default configuration uses PeerJS Cloud/STUN and has no provisioned TURN relay. On restrictive school/work networks, joining may fail with a timeout; use another network or configure a TURN service. PeerJS Cloud is still an external dependency for initial connection establishment. See [PeerJS connection requirements](https://peerjs.com/client/faq).
+WebRTC cannot connect directly through every firewall or NAT. PeerJS 1.5.5 supplies default STUN and shared TURN servers, but this project has no separately provisioned relay service. These defaults do not guarantee connectivity on restrictive school/work networks. If joining times out, try home Wi-Fi or a phone hotspot and disconnect your VPN. PeerJS Cloud is an external dependency for initial connection establishment. See [PeerJS connection requirements](https://peerjs.com/client/faq).
+
+For dependable cross-network play, provision a TURN service with UDP plus TCP/TLS on port 443 and pass its ICE configuration through the option below. Fetch short-lived credentials from a small backend; GitHub Pages can host the game but cannot run that credential backend. Test with clients on different networks and with `config.iceTransportPolicy: 'relay'` to verify that your provisioned relay actually works. Same-machine browser tests alone do not establish cross-network reliability.
 
 For a custom signaling server or TURN setup, define `window.HAZARDOUS_PEER_OPTIONS` before loading the game module. It accepts PeerJS options (host/port/path/secure and config.iceServers). Obtain short-lived TURN credentials from your provider; do not publish permanent secrets in the static site. The test suite uses this option for an ephemeral local signaling server; production uses PeerJS Cloud by default.
 

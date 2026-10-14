@@ -35,10 +35,12 @@
       <div id="online-menu" class="overlay hidden"><div class="menu-card online-card">
         <h2>PLAY ONLINE</h2>
         <div id="room-actions"><button id="create-room" class="pixel-button">CREATE ROOM</button>
-        <label for="room-code">ROOM CODE</label><input id="room-code" maxlength="6" autocomplete="off" placeholder="K7Q4MX">
+        <label for="room-code">ROOM CODE OR INVITE LINK</label><input id="room-code" autocomplete="off" spellcheck="false" placeholder="K7Q4MX or invite link">
         <button id="join-room" class="pixel-button">JOIN ROOM</button></div>
-        <div id="lobby" class="hidden"><h3 id="lobby-code"></h3><p id="your-player"></p><div id="lobby-players"></div><button id="start-game" class="pixel-button" disabled>START GAME</button></div>
-        <p id="online-status" role="status" aria-live="polite"></p><button id="online-back" class="pixel-button">BACK TO MAIN MENU</button>
+        <div id="lobby" class="hidden"><h3 id="lobby-code"></h3><button id="copy-invite" class="pixel-button">COPY INVITE LINK</button><input id="invite-link" readonly aria-label="Invite link"><p id="your-player"></p><div id="lobby-players"></div><button id="start-game" class="pixel-button" disabled>START GAME</button></div>
+        <p id="online-status" role="status" aria-live="polite"></p><button id="retry-online" class="pixel-button">RETRY CONNECTION</button>
+        <details><summary>TROUBLE CONNECTING?</summary><p>Keep the host's game tab open. Ask for a fresh invite if the host left. If joining times out, try home Wi-Fi or a phone hotspot and disconnect your VPN. Some school/work networks block multiplayer connections.</p></details>
+        <button id="online-back" class="pixel-button">BACK TO MAIN MENU</button>
       </div></div>
       <div id="online-score" class="hidden" aria-label="Online scoreboard"></div>
       <div id="online-help" class="help-panel hidden">A/D MOVE · W JUMP / DOUBLE JUMP / WALL JUMP<br>MOUSE AIMS FROM YOUR BALL<br>HOLD LEFT CLICK TO CHARGE; RELEASE TO SWING<br>S RECALLS YOUR BALL · H CLOSES HELP<br>HOST CONTROLS ARENA / RESTART / NEXT LEVEL</div>

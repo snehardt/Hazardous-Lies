@@ -1,7 +1,12 @@
 import assert from 'node:assert/strict';
-import {roomCode,validCode,validRoom,inputFromPeer,PROTOCOL} from '../dist/protocol.js';
+import {roomCode,validCode,inviteCode,validRoom,inputFromPeer,PROTOCOL} from '../dist/protocol.js';
 for(let i=0;i<1000;i++)assert.ok(validCode(roomCode()));
 assert.equal(validCode('000000'),false);assert.equal(validCode('ABCD'),false);
+assert.equal(inviteCode(' abcd23 '),'ABCD23');
+assert.equal(inviteCode('https://example.com/Hazardous-Lies/?room=abcd23'),'ABCD23');
+assert.equal(inviteCode('https://example.com/?room=000000'),'');
+assert.equal(inviteCode('https://example.com/?other=ABCD23'),'');
+assert.equal(inviteCode('not a link'),'');
 const host=PROTOCOL+'ABCD23',guest=PROTOCOL+'DEFG45';
 const room={code:'ABCD23',host,phase:'lobby',epoch:0,players:[{id:host,slot:0},{id:guest,slot:1},null,null]};
 assert.ok(validRoom(room,host,guest));

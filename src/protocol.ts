@@ -5,6 +5,11 @@ export function roomCode() {
   return Array.from(crypto.getRandomValues(new Uint8Array(6)),n=>alphabet[n%32]).join('');
 }
 export function validCode(code:unknown):code is string {return typeof code==='string' && /^[A-HJ-NP-Z2-9]{6}$/.test(code);}
+export function inviteCode(value:string):string {
+  const code=value.trim().toUpperCase();
+  if(validCode(code))return code;
+  try {const url=new URL(value.trim());const code=url.searchParams.get('room')?.toUpperCase();return validCode(code)?code:'';}catch{return '';}
+}
 export function validRoom(value:any,host:string,self:string):value is Room {
   return value?.host===host && validCode(value.code) && host===PROTOCOL+value.code && ['lobby','playing'].includes(value.phase) && Number.isSafeInteger(value.epoch) && value.epoch>=0 && Array.isArray(value.players) && value.players.length===4 && value.players[0]?.id===host && value.players.every((p:any,i:number)=>p===null || p?.slot===i && typeof p.id==='string') && value.players.some((p:any)=>p?.id===self) && new Set(value.players.filter(Boolean).map((p:any)=>p.id)).size===value.players.filter(Boolean).length;
 }

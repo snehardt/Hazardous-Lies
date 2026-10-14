@@ -8,7 +8,7 @@ const browser = await chromium.launch({headless:true, ...(process.env.BROWSER_CH
 const signaling=process.env.PEER_PUBLIC?undefined:spawn(process.execPath,['--input-type=module','-e',"import {PeerServer} from 'peer';PeerServer({port:0,path:'/peerjs',host:'127.0.0.1'},server=>console.log(server.address().port));"],{stdio:['ignore','pipe','inherit'],windowsHide:true});
 const signalPort=signaling?Number((await once(signaling.stdout,'data'))[0].toString().trim()):0;
 const pages=[], errors=[];
-async function page() {
+async function page(invite) {
   const p=await browser.newPage({viewport:{width:1440,height:1100}});pages.push(p);
   p.on('pageerror',e=>errors.push(e.message));
   await p.route('**/dist/main.js',async route=>{const response=await route.fetch();await route.fulfill({response,body:(await response.text())+`
@@ -26,16 +26,22 @@ const originalReceiveInput=receiveInput;receiveInput=data=>{if(netStats.inputDel
 window.netStats=netStats;
 window.onlineTest={get players(){return players},get room(){return room},get aims(){return aims},get slots(){return onlineSlots},get winner(){return winner},get level(){return levelIndex},get inputSeq(){return inputSeq},get acknowledged(){return acknowledged},sendInput,win,addWall(){platforms.push({x:215,y:100,w:20,h:440,r:0,purpose:'online regression wall'});}};`});});
   if(!process.env.PEER_PUBLIC)await p.addInitScript(options=>{window.HAZARDOUS_PEER_OPTIONS=options;},{host:'127.0.0.1',port:signalPort,path:'/peerjs',secure:false,config:{iceServers:[]}});
-  await p.goto(process.env.TEST_URL || 'http://localhost:5173');await p.click('#play-online');
-  await p.waitForFunction(()=>document.querySelector('#online-status').textContent.startsWith('Connected.'));
+  await p.goto(invite || process.env.TEST_URL || 'http://localhost:5173');
+  if(!invite){await p.click('#play-online');await p.waitForFunction(()=>!document.querySelector('#create-room').disabled);}
+  else await p.waitForFunction(()=>window.onlineTest.room);
   return p;
 }
 try {
   const a=await page();await a.click('#create-room');await a.waitForFunction(()=>window.onlineTest.room);
   const code=await a.evaluate(()=>window.onlineTest.room.code);
+  const invite=await a.locator('#invite-link').inputValue();
+  assert.equal(new URL(invite).searchParams.get('room'),code);
   assert.equal(await a.locator('#start-game').isDisabled(),true);
   const b=await page();await b.fill('#room-code','0000');await b.click('#join-room');await b.waitForFunction(()=>document.querySelector('#online-status').textContent.includes('not found'));
-  for(const p of [b,await page(),await page()]){await p.fill('#room-code',code);await p.click('#join-room');await p.waitForFunction(()=>window.onlineTest.room);}
+  await b.click('#retry-online');await b.waitForFunction(()=>!document.querySelector('#create-room').disabled);
+  await b.fill('#room-code',invite);await b.press('#room-code','Enter');await b.waitForFunction(()=>window.onlineTest.room);
+  await page(invite);
+  const manual=await page();await manual.fill('#room-code',code);await manual.click('#join-room');await manual.waitForFunction(()=>window.onlineTest.room);
   await a.waitForFunction(()=>window.onlineTest.room.players.filter(Boolean).length===4);
   const full=await page();await full.fill('#room-code',code);await full.click('#join-room');
   await full.waitForFunction(()=>document.querySelector('#online-status').textContent.includes('full'));
@@ -124,6 +130,6 @@ try {
   await a.keyboard.down('ArrowRight');await a.waitForTimeout(150);await a.keyboard.up('ArrowRight');
   assert.equal(await a.evaluate(()=>window.onlineTest.players.length),2);
   assert.deepEqual(errors,[]);
-  console.log('PeerJS/WebRTC browser tests passed: four clients, lobby, movement ownership, double jump, mouse world aim, own-ball swing, P4 win, level sync, disconnect/rejoin, return to local.');
+  console.log('PeerJS/WebRTC browser tests passed: invite auto-join, pasted links, Enter to join, retry, four clients, lobby, movement ownership, double jump, mouse world aim, own-ball swing, P4 win, level sync, disconnect/rejoin, return to local.');
 } finally { await browser.close();if(signaling){const exited=once(signaling,'exit');signaling.kill();await exited;} }
 
