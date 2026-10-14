@@ -11,6 +11,10 @@ const pages=[], errors=[];
 async function page(invite) {
   const p=await browser.newPage({viewport:{width:1440,height:1100}});pages.push(p);
   p.on('pageerror',e=>errors.push(e.message));
+  if(process.env.TEST_RELAY_CONFIG){
+    await p.route('**/network-config.js',route=>route.fulfill({contentType:'text/javascript',body:"window.HAZARDOUS_TURN_ENDPOINT='https://relay.example/credentials';"}));
+    await p.route('https://relay.example/credentials',route=>route.fulfill({headers:{'Access-Control-Allow-Origin':'*'},json:{iceServers:[{urls:'turn:127.0.0.1:9',username:'test',credential:'test'}]}}));
+  }
   await p.route('**/dist/main.js',async route=>{const response=await route.fetch();await route.fulfill({response,body:(await response.text())+`
 const netStats={snapshots:0,packetWrites:0,physics:0,predicted:0,wrongPrediction:0,ballPhysics:0,frames:[],capture:false,jitter:false,delivered:0};
 const originalReceiveSnapshot=receiveSnapshot;

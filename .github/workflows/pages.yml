@@ -39,12 +39,13 @@ jobs:
       - name: Check multiplayer protocol and synchronization
         run: |
           pnpm test:rooms
+          pnpm test:network
           pnpm test:snapshots
           pnpm test:prediction
       - name: Prepare public files
         run: |
           mkdir _site
-          cp index.html style.css _site/
+          cp index.html style.css network-config.js _site/
           cp -R assets dist _site/
           touch _site/.nojekyll
       - name: Configure Pages

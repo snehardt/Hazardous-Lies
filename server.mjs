@@ -8,7 +8,7 @@ const server = http.createServer(async (req, res) => {
     const path = resolve(root, '.' + decodeURIComponent(new URL(req.url, 'http://localhost').pathname === '/' ? '/index.html' : new URL(req.url, 'http://localhost').pathname));
     if (!path.startsWith(root + sep)) { res.writeHead(403).end(); return; }
     const relative = path.slice(root.length + 1).replaceAll('\\', '/');
-    if (!['index.html', 'style.css'].includes(relative) && !relative.startsWith('dist/') && !relative.startsWith('assets/')) { res.writeHead(404).end(); return; }
+    if (!['index.html', 'style.css', 'network-config.js'].includes(relative) && !relative.startsWith('dist/') && !relative.startsWith('assets/')) { res.writeHead(404).end(); return; }
     const data = await readFile(path);
     res.writeHead(200, { 'Content-Type': types[extname(path)] || 'application/octet-stream', 'Cache-Control': 'no-store' });
     res.end(data);

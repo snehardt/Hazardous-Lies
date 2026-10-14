@@ -1,0 +1,7 @@
+name = "hazardous-lies-relay"
+main = "worker.mjs"
+compatibility_date = "2025-09-01"
+workers_dev = true
+
+[vars]
+ALLOWED_ORIGIN = "https://snehardt.github.io"

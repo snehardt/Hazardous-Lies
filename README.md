@@ -104,6 +104,8 @@ For dependable cross-network play, provision a TURN service with UDP plus TCP/TL
 
 For a custom signaling server or TURN setup, define `window.HAZARDOUS_PEER_OPTIONS` before loading the game module. It accepts PeerJS options (host/port/path/secure and config.iceServers). Obtain short-lived TURN credentials from your provider; do not publish permanent secrets in the static site. The test suite uses this option for an ephemeral local signaling server; production uses PeerJS Cloud by default.
 
+For the supplied Cloudflare relay integration, follow [relay/SETUP.md](relay/SETUP.md). Deploy `relay/worker.mjs` with your TURN key in Worker secrets, then set the public Worker URL in `network-config.js`. The game loads temporary credentials before connecting. The endpoint starts empty, so a service account and deployment are required to activate the relay. `pnpm test:network` checks credential loading and the Worker with mocked provider responses.
+
 ### Movement and walls
 
 The host sends timestamped snapshots about **25 times per second**. Remote players and balls are rendered from a roughly 100 ms interpolation buffer. The joining player's own movement is predicted immediately using the same 120 Hz movement and collision code, then reconciled against host acknowledgements by replaying only unacknowledged commands. Guests do not simulate balls, other players or scoring. Movement history and host time budgets are bounded.

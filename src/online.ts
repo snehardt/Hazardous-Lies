@@ -1,12 +1,14 @@
 import { Peer, type DataConnection, type PeerOptions } from 'peerjs';
 import { PROTOCOL, roomCode, validCode, validRoom, inputFromPeer, type Room } from './protocol.js';
+import { loadPeerOptions } from './network.js';
 export type { Room } from './protocol.js';
 // Optional private signaling / short-lived TURN configuration. Defaults to PeerJS Cloud.
-declare global { interface Window { HAZARDOUS_PEER_OPTIONS?: PeerOptions } }
+declare global { interface Window { HAZARDOUS_PEER_OPTIONS?: PeerOptions; HAZARDOUS_TURN_ENDPOINT?:string } }
 type Reply=(value:{error?:string;ok?:boolean})=>void;
 type Link={control:DataConnection;state?:DataConnection;seen:number;window:number;count:number};
 export async function connectOnline(onRoom:(room:Room)=>void,onInput:(data:any)=>void,onSnapshot:(data:any)=>void,onLost:()=>void,onReady:(ready:boolean)=>void=()=>{}) {
   const status=document.getElementById('online-status')!;
+  const options=await loadPeerOptions(window.HAZARDOUS_PEER_OPTIONS,window.HAZARDOUS_TURN_ENDPOINT);
   let peer:Peer,closed=false,current:Room|null=null,hostLink:Link|undefined;
   let joining:Reply|undefined,joinTimer:ReturnType<typeof setTimeout>|undefined,attempts=0;
   const guests=new Map<string,Link>(), pendingConnections=new Set<DataConnection>();
@@ -75,7 +77,7 @@ export async function connectOnline(onRoom:(room:Room)=>void,onInput:(data:any)=
     });
   }
   function initialize() {
-    peer=new Peer(PROTOCOL+roomCode(),window.HAZARDOUS_PEER_OPTIONS);
+    peer=new Peer(PROTOCOL+roomCode(),options);
     const active=peer;
     const startup=later(()=>{if(!closed && peer===active && !peer.open){status.textContent='Cannot reach the connection service. Check your internet or VPN, then click Retry Connection.';onReady(false);}},20000);
     peer.on('open',()=>{if(closed || peer!==active)return;clearTimeout(startup);timers.delete(startup);status.textContent='Connected. Create a room or join a six-character code.';onReady(true);});
@@ -149,9 +151,9 @@ export async function connectOnline(onRoom:(room:Room)=>void,onInput:(data:any)=
             watch(state,data=>{
               if(hostLink!==link)return;
               if(data?.type==='snapshot' && current?.phase==='playing' && data.state?.epoch===current.epoch){link.seen=performance.now();onSnapshot(data.state);}
-            },()=>{if(hostLink===link)loseHost('Game channel closed. Create or join a new room.');});
+            },()=>{if(hostLink===link)loseHost('The game connection failed or closed. The host may still be online. Try a fresh invite or another network.');});
           }
-        },()=>{if(hostLink===link)loseHost(joining?'Could not complete the connection. Keep the host tab open and retry. If it keeps failing, try home Wi-Fi or a phone hotspot.':'Host left or disconnected. Create or join a new room.');});
+        },()=>{if(hostLink===link)loseHost(joining?'Could not complete the connection. Keep the host tab open and retry. If it keeps failing, try home Wi-Fi or a phone hotspot.':'Connection to the host failed or closed. The host may still be online. Try a fresh invite or another network.');});
         joinTimer=later(()=>{if(hostLink===link && joining)loseHost('Connection timed out. Keep the host tab open and retry. Try home Wi-Fi or a phone hotspot if your network blocks multiplayer.');},25000);
       } else reply({error:'Unknown room request.'});
     },
