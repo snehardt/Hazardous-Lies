@@ -5,16 +5,21 @@ import { once } from 'node:events';
 const require = createRequire(import.meta.url);
 const { chromium } = require(process.env.PLAYWRIGHT_PATH || 'playwright');
 const browser = await chromium.launch({headless:true, ...(process.env.BROWSER_CHANNEL ? {channel:process.env.BROWSER_CHANNEL} : {})});
-const signaling=process.env.PEER_PUBLIC?undefined:spawn(process.execPath,['--input-type=module','-e',"import {PeerServer} from 'peer';PeerServer({port:0,path:'/peerjs',host:'127.0.0.1'},server=>console.log(server.address().port));"],{stdio:['ignore','pipe','inherit'],windowsHide:true});
-const signalPort=signaling?Number((await once(signaling.stdout,'data'))[0].toString().trim()):0;
+const relayUrl=process.env.TEST_RELAY_URL || 'http://127.0.0.1:8787';
+if(!process.env.TEST_RELAY_URL)await import('../scripts/prepare-site.mjs');
+const relayProcess=process.env.TEST_RELAY_URL?undefined:spawn(process.execPath,['node_modules/wrangler/bin/wrangler.js','dev','--config','relay/wrangler.toml','--port','8787','--local'],{stdio:['ignore','ignore','inherit'],windowsHide:true});
+let available=false;
+for(let attempt=0;attempt<60;attempt++) {
+  try {available=(await fetch(relayUrl+'/health')).ok;}catch{}
+  if(available)break;
+  await new Promise(resolve=>setTimeout(resolve,500));
+}
+if(!available){relayProcess?.kill();await browser.close();throw new Error('Test relay did not start.');}
 const pages=[], errors=[];
 async function page(invite) {
   const p=await browser.newPage({viewport:{width:1440,height:1100}});pages.push(p);
   p.on('pageerror',e=>errors.push(e.message));
-  if(process.env.TEST_RELAY_CONFIG){
-    await p.route('**/network-config.js',route=>route.fulfill({contentType:'text/javascript',body:"window.HAZARDOUS_TURN_ENDPOINT='https://relay.example/credentials';"}));
-    await p.route('https://relay.example/credentials',route=>route.fulfill({headers:{'Access-Control-Allow-Origin':'*'},json:{iceServers:[{urls:'turn:127.0.0.1:9',username:'test',credential:'test'}]}}));
-  }
+  await p.route('**/network-config.js',route=>route.fulfill({contentType:'text/javascript',body:`window.HAZARDOUS_RELAY_URL=${JSON.stringify(relayUrl)};`}));
   await p.route('**/dist/main.js',async route=>{const response=await route.fetch();await route.fulfill({response,body:(await response.text())+`
 const netStats={snapshots:0,packetWrites:0,physics:0,predicted:0,wrongPrediction:0,ballPhysics:0,frames:[],capture:false,jitter:false,delivered:0};
 const originalReceiveSnapshot=receiveSnapshot;
@@ -29,7 +34,6 @@ const originalRender=render;render=(poses=players)=>{if(netStats.capture)netStat
 const originalReceiveInput=receiveInput;receiveInput=data=>{if(netStats.inputDelay)setTimeout(()=>originalReceiveInput(data),netStats.inputDelay);else originalReceiveInput(data);};
 window.netStats=netStats;
 window.onlineTest={get players(){return players},get room(){return room},get aims(){return aims},get slots(){return onlineSlots},get winner(){return winner},get level(){return levelIndex},get inputSeq(){return inputSeq},get acknowledged(){return acknowledged},sendInput,win,addWall(){platforms.push({x:215,y:100,w:20,h:440,r:0,purpose:'online regression wall'});}};`});});
-  if(!process.env.PEER_PUBLIC)await p.addInitScript(options=>{window.HAZARDOUS_PEER_OPTIONS=options;},{host:'127.0.0.1',port:signalPort,path:'/peerjs',secure:false,config:{iceServers:[]}});
   await p.goto(invite || process.env.TEST_URL || 'http://localhost:5173');
   if(!invite){await p.click('#play-online');await p.waitForFunction(()=>!document.querySelector('#create-room').disabled);}
   else await p.waitForFunction(()=>window.onlineTest.room);
@@ -38,6 +42,7 @@ window.onlineTest={get players(){return players},get room(){return room},get aim
 try {
   const a=await page();await a.click('#create-room');await a.waitForFunction(()=>window.onlineTest.room);
   const code=await a.evaluate(()=>window.onlineTest.room.code);
+  if(process.env.TEST_IDLE_MS)await a.waitForTimeout(Number(process.env.TEST_IDLE_MS));
   const invite=await a.locator('#invite-link').inputValue();
   assert.equal(new URL(invite).searchParams.get('room'),code);
   assert.equal(await a.locator('#start-game').isDisabled(),true);
@@ -77,7 +82,7 @@ try {
   await a.click('#again');await b.waitForFunction(()=>window.onlineTest.level===1);
   assert.equal(await a.evaluate(()=>{const p=window.onlineTest.players;return p[3].x>p[1].x&&p[1].x>p[0].x&&p[0].x>p[2].x}),true);
   await a.screenshot({path:'artifacts/online-game.png'});
-  // Long recall history exceeds PeerJS JSON's message limit; snapshots use binary chunking.
+  // Large snapshots preserve long recall histories through the room relay.
   await a.evaluate(()=>{for(const p of window.onlineTest.players)p.ball.visited=Array.from({length:512},(_,i)=>({x:i+0.123456789,y:500.987654321}));});
   await b.waitForFunction(()=>window.onlineTest.players.every(p=>p.ball.visited.length>=500));
 
@@ -134,6 +139,6 @@ try {
   await a.keyboard.down('ArrowRight');await a.waitForTimeout(150);await a.keyboard.up('ArrowRight');
   assert.equal(await a.evaluate(()=>window.onlineTest.players.length),2);
   assert.deepEqual(errors,[]);
-  console.log('PeerJS/WebRTC browser tests passed: invite auto-join, pasted links, Enter to join, retry, four clients, lobby, movement ownership, double jump, mouse world aim, own-ball swing, P4 win, level sync, disconnect/rejoin, return to local.');
-} finally { await browser.close();if(signaling){const exited=once(signaling,'exit');signaling.kill();await exited;} }
+  console.log('Cloudflare WebSocket browser tests passed: invite auto-join, pasted links, Enter to join, retry, four clients, lobby, movement ownership, double jump, mouse world aim, own-ball swing, P4 win, level sync, disconnect/rejoin, return to local.');
+} finally { await browser.close();if(relayProcess){const exited=once(relayProcess,'exit');relayProcess.kill();await exited;} }
 

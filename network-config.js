@@ -1,3 +1,2 @@
-// Public configuration only. Never put a Cloudflare API token or TURN key here.
-// After deploying relay/worker.mjs, paste its HTTPS URL between the quotes.
-window.HAZARDOUS_TURN_ENDPOINT = '';
+// Deploy relay/wrangler.toml on Workers Free, then paste its public HTTPS URL.
+window.HAZARDOUS_RELAY_URL = 'https://hazardous-lies-relay.spencer-ehardt.workers.dev';

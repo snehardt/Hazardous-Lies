@@ -53,6 +53,8 @@ try {
   t.hitDown(0); for(let j=0;j<60;j++)t.update(dt); t.hitUp(0); checks.charge=t.players[0].strokes===1 && t.players[0].ball.vx>300;
   t.reset();t.hitDown(1);t.hitDown(1);for(let j=0;j<30;j++)t.update(dt);t.hitUp(1);checks.blueShot=t.players[1].strokes===1;
   t.reset(); const golfer=t.players[1], ball=t.players[0].ball;
+  // Isolate the impact from randomized tee order and the left screen boundary.
+  golfer.x=150;golfer.y=150;
   t.players[0].x=1000;t.players[0].y=80;ball.x=golfer.x-26;ball.y=golfer.y;ball.vx=600;ball.vy=0;
   t.moveBall(ball,dt,0);checks.bonk=golfer.tumble&&golfer.vy<-250&&ball.vx<0;
   t.reset(); const a=t.players[0];a.grounded=false;a.coyote=0;a.jumps=2;a.wall=1;t.jump(a,0);checks.wallJump=a.vx<0&&a.vy<0;

@@ -4,16 +4,16 @@ A golf platformer with two-player same-keyboard local play and 2–4 player onli
 
 ## Run
 
-Play local or online: [Hazardous Lies](https://snehardt.github.io/Hazardous-Lies/).
+Play local or online: [Hazardous Lies on Cloudflare](https://hazardous-lies-relay.spencer-ehardt.workers.dev).
 
-GitHub Pages builds and publishes the game automatically when changes are pushed to `main`. Both players share one keyboard on the computer opening the link.
+The Cloudflare link hosts the game and free multiplayer relay. Local play shares one keyboard; online players use separate devices. The [GitHub Pages mirror](https://snehardt.github.io/Hazardous-Lies/) updates when changes are pushed to `main`.
 
-Requires Node.js and npm (or pnpm).
+Requires Node.js 22 or newer and pnpm.
 
 ```sh
-npm install
-npm run build
-npm run dev
+pnpm install
+pnpm build
+pnpm dev
 ```
 
 Open http://localhost:5173. The compiled game also works on a static web host: upload `index.html`, `style.css`, `assets/`, and `dist/`. Rebuild after editing TypeScript.
@@ -69,62 +69,44 @@ Separate tower checks verify all three intended shelf lifts and their clearances
 
 `src/levels.ts` contains all ten terrain layouts, hazards, starts, cups and route labels. `src/main.ts` contains the Canvas renderer and fixed 120 Hz physics loop. Original pixel portraits and CSS panels keep the interface compact. The Press Start 2P font is bundled with its SIL Open Font License; there are no runtime art or font downloads.
 
+## Online multiplayer (Cloudflare WebSocket relay)
 
+The game and room relay can run together on Cloudflare Workers Free. GitHub Pages can also host the game using the public Worker URL in `network-config.js`. See [relay/SETUP.md](relay/SETUP.md) for deployment and free-plan limits.
 
+1. Open the game and choose **Play Online**.
+2. Choose **Create Room**, then **Copy Invite Link** and share it with up to three guests.
+3. Opening an invite automatically joins the room. Guests can also paste the link or six-character code and press Enter.
+4. The host starts once at least two players are connected. Keep the host's tab open and visible.
 
+Each client controls its assigned golfer with A/D, W, S and mouse aiming/charging. The host selects arenas, restarts, and advances levels. A guest leaving returns the room to the lobby and frees their slot. When the host leaves, the room ends. Retry Connection reconnects to the service; an old invite cannot restore a departed host.
 
+### Connection transport
 
+Each browser connects to the Cloudflare Worker using secure WebSockets over HTTPS port 443. The relay forwards guest inputs to the host and host snapshots to guests. Networks that block WebSockets or Cloudflare can prevent play.
 
+### Room authority and synchronization
 
+One SQLite-backed Durable Object coordinates each room. The relay assigns socket identities and player slots, validates and rate-limits inputs, admits at most four players, and forwards snapshots only from the host. Codes are cryptographically random invitations, not accounts or passwords. Room metadata lives in WebSocket attachments so it survives hibernation; no database writes or saved match storage are needed. Heartbeats use Cloudflare's automatic response API to allow idle rooms to hibernate.
 
-## Online multiplayer (PeerJS + WebRTC)
-
-Play at **[Hazardous Lies on GitHub Pages](https://snehardt.github.io/Hazardous-Lies/)**. Both local and online play work on this static site. No Render service, Socket.IO relay, or locally running Node server is needed to play.
-
-1. Both players open the link and choose **Play Online**.
-2. Once connected, one player chooses **Create Room**.
-3. Choose **Copy Invite Link** and share it with up to three guests. Keep the host's game tab open.
-4. Opening the invite automatically connects and joins the room. Guests can also paste the invite link or six-character code into **Room Code or Invite Link** and press Enter. The host can start once all game channels are ready.
-
-If connecting fails, use **Retry Connection** without returning to the main menu. Joining waits up to 25 seconds for slower networks. A room disappears when its host leaves; ask for a fresh invite after the host reconnects.
-
-Every online client controls only its assigned golfer: **A/D** move, **W** jump/double jump/wall jump, **S** recalls. Aim with the mouse; hold left click to charge and release to swing near your own slow/stationary ball. The host selects arenas, restarts, and advances levels. Local multiplayer controls, ball physics and level layouts are unchanged.
-
-### Connections and hosting
-
-PeerJS Cloud provides signaling to introduce browsers. Gameplay travels on WebRTC data channels between guests and the host. The app uses a reliable ordered control/input channel and a separate unordered binary snapshot channel, with send-buffer backpressure and snapshot sequence filtering. Binary chunking supports long recall histories. PeerJS's unordered option does not disable retransmissions; this is not a custom unreliable UDP protocol.
-
-The host owns the four-player lobby, assigns slots from channel identities, validates/rate-limits guest input, and runs authoritative world physics. Guests cannot choose another player's slot or publish authoritative snapshots. Room codes are cryptographically random and protocol-namespaced; initial ID collisions retry with another code. Codes are invitations, not accounts or passwords.
-
-A guest leaving returns everyone else to the lobby and frees that slot. The host starts a new match after any replacements join. **If the host leaves, the room ends** and guests can create or join another room. There is no automatic host migration. Connection timeouts and heartbeat cleanup handle broken peers, and leaving closes channels, signaling and timers. The host must keep the game tab visible; background browser throttling can still affect gameplay.
-
-WebRTC cannot connect directly through every firewall or NAT. PeerJS 1.5.5 supplies default STUN and shared TURN servers, but this project has no separately provisioned relay service. These defaults do not guarantee connectivity on restrictive school/work networks. If joining times out, try home Wi-Fi or a phone hotspot and disconnect your VPN. PeerJS Cloud is an external dependency for initial connection establishment. See [PeerJS connection requirements](https://peerjs.com/client/faq).
-
-For dependable cross-network play, provision a TURN service with UDP plus TCP/TLS on port 443 and pass its ICE configuration through the option below. Fetch short-lived credentials from a small backend; GitHub Pages can host the game but cannot run that credential backend. Test with clients on different networks and with `config.iceTransportPolicy: 'relay'` to verify that your provisioned relay actually works. Same-machine browser tests alone do not establish cross-network reliability.
-
-For a custom signaling server or TURN setup, define `window.HAZARDOUS_PEER_OPTIONS` before loading the game module. It accepts PeerJS options (host/port/path/secure and config.iceServers). Obtain short-lived TURN credentials from your provider; do not publish permanent secrets in the static site. The test suite uses this option for an ephemeral local signaling server; production uses PeerJS Cloud by default.
-
-For the supplied Cloudflare relay integration, follow [relay/SETUP.md](relay/SETUP.md). Deploy `relay/worker.mjs` with your TURN key in Worker secrets, then set the public Worker URL in `network-config.js`. The game loads temporary credentials before connecting. The endpoint starts empty, so a service account and deployment are required to activate the relay. `pnpm test:network` checks credential loading and the Worker with mocked provider responses.
-
-### Movement and walls
-
-The host sends timestamped snapshots about **25 times per second**. Remote players and balls are rendered from a roughly 100 ms interpolation buffer. The joining player's own movement is predicted immediately using the same 120 Hz movement and collision code, then reconciled against host acknowledgements by replaying only unacknowledged commands. Guests do not simulate balls, other players or scoring. Movement history and host time budgets are bounded.
-
-Small position corrections are eased only when the full player hull and correction path are clear. Respawns, restarts and level changes do not blend across the map. The wall crossing test also catches shallow overlaps left by corner landings. Movement speed, acceleration, gravity, jump strengths and ball physics are unchanged; intentional magnet recall still passes balls through terrain.
+The host runs authoritative physics and sends snapshots about 25 times per second. Guests render remote entities through a roughly 100 ms interpolation buffer and predict their own movement at 120 Hz, reconciling only unacknowledged commands. Snapshot sequence/epoch filtering, send-buffer backpressure, input budgets, reset handling and wall-safe corrections remain in place. Guests do not simulate balls or scoring.
 
 ### Development and deployment
 
-`pnpm install`, `pnpm build`, and `pnpm dev` run a static development server at http://localhost:5173. The build type-checks TypeScript and bundles PeerJS with the game, so there is no browser library CDN dependency. GitHub Actions builds and publishes index.html, style.css, assets and dist to GitHub Pages on every push to main. Relative asset paths support the /Hazardous-Lies/ project URL.
+- `pnpm install`, `pnpm build`, `pnpm dev`: static development server at http://localhost:5173.
+- `pnpm relay:dev`: local Cloudflare runtime at http://localhost:8787. Run `pnpm build:site` first.
+- `pnpm relay:login`: authorize Wrangler in your Cloudflare account.
+- `pnpm relay:deploy`: build the site and deploy the game plus relay. Keep the account on **Workers Free**.
 
-The former Render blueprint and Socket.IO room server have been removed from this repository. Removing configuration does not delete a previously created hosting account or service; an old deployment can be suspended separately.
+Only public game files are packaged by `scripts/prepare-site.mjs`. GitHub Actions also uses that script to publish to GitHub Pages on pushes to main. The Worker serves its own public relay configuration automatically. GitHub Pages uses `network-config.js`, which must contain the deployed Worker URL.
 
 ### Validation
 
 - `pnpm check`: TypeScript.
-- `pnpm test:rooms`: room-code, identity, membership, epoch and input validation.
+- `pnpm test:rooms`: room-code, membership, epoch and input validation.
+- `pnpm test:network`: relay authority, capacity, invalid joins, hibernation recovery, host departure and origin checks.
 - `pnpm test:snapshots`: interpolation, ordering, packet loss, resets and independent respawns.
-- `pnpm test:prediction`: acknowledgement/replay, delayed input, jump preservation, authority rate bounds and stalls.
-- `pnpm test:online`: real WebRTC channels across four browser sessions, with an automatically started local PeerJS signaling server. Covers room capacity, movement ownership, large chunked snapshots, injected jitter/input lag, walls, disconnect/rejoin, host departure and return to local play. Set PEER_PUBLIC=1 to use public PeerJS signaling instead.
-- `pnpm test`: the original local campaign suite, including 48 wall cases and 1,288 floor cases.
+- `pnpm test:prediction`: acknowledgement/replay, delayed input, jump preservation, authority bounds and stalls.
+- `pnpm test:online`: four browser sessions against the actual local Cloudflare runtime. Covers invites, movement ownership, large snapshots, injected jitter/input lag, walls, disconnect/rejoin, host departure and return to local play.
+- `pnpm test`: local campaign/physics suite.
 
-Build first and run the static development server for browser tests. Set TEST_URL to override http://localhost:5173. Install Playwright separately or set PLAYWRIGHT_PATH; BROWSER_CHANNEL=msedge uses installed Edge. Browser artifacts are written to artifacts/ and are not published.
+Build first and run the static development server for browser tests. Install Playwright separately or set `PLAYWRIGHT_PATH`; `BROWSER_CHANNEL=msedge` uses installed Edge. `TEST_URL` overrides the game URL and `TEST_RELAY_URL` selects an already running relay, including the deployed Worker. A live relay test uses real game traffic and counts against free limits. Browser artifacts go under `artifacts/` and are not published.

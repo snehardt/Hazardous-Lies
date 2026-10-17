@@ -44,9 +44,7 @@ jobs:
           pnpm test:prediction
       - name: Prepare public files
         run: |
-          mkdir _site
-          cp index.html style.css network-config.js _site/
-          cp -R assets dist _site/
+          node scripts/prepare-site.mjs
           touch _site/.nojekyll
       - name: Configure Pages
         uses: actions/configure-pages@v6

@@ -1,71 +1,59 @@
-# Enable reliable multiplayer with Cloudflare TURN
+# Cloudflare setup — free game hosting and multiplayer
 
-The game stays on GitHub Pages. This small Worker supplies temporary relay credentials so players behind restrictive routers can connect. Setting up the Worker alone does not enable it: the game must also receive its URL in `network-config.js`.
+Use **Workers Free**. No credit card, paid plan, domain purchase, or Worker secrets are required for this deployment.
 
-## 1. Create your account and TURN key
+A Worker hosts the game and relays secure WebSocket traffic through one SQLite-backed Durable Object per room. The host browser still runs physics.
 
-1. Create an account at https://dash.cloudflare.com/sign-up.
-2. In the dashboard, open **Realtime** and its **TURN** section. Create a TURN key.
-3. Save the **TURN key ID** and its **API token**. These belong only in Worker secrets. Do not paste them into GitHub, the game, or chat.
+## Cost and limits
 
-Cloudflare TURN is usage billed. The documented standalone price is $0.05 per outbound GB, checked October 14, 2026. Worker billing is separate; review the plans in your account. You do not need to transfer a domain to use a workers.dev endpoint.
+Verified October 14, 2026 using [Cloudflare's Durable Objects pricing](https://developers.cloudflare.com/durable-objects/platform/pricing/) and [Workers pricing](https://developers.cloudflare.com/workers/platform/pricing/):
 
-Official guide: https://developers.cloudflare.com/realtime/turn/generate-credentials/
+- Workers Free: 100,000 dynamic requests/day; static assets are free and unlimited.
+- Durable Objects Free: 100,000 request units/day and 13,000 GB-seconds/day. Incoming WebSocket messages count at a 20:1 ratio; outgoing messages do not count as requests.
+- On Workers Free, operations fail when a free limit is exhausted. Daily limits reset at 00:00 UTC. There are no automatic usage overage charges on this plan.
+- All projects in your account share these limits. Keep **Compute → Workers plans → Free** as your current plan. Do not click Upgrade or subscribe to Realtime.
 
-## 2. Deploy the supplied Worker
+## Deploy
 
-1. Open **Workers & Pages → Create application**. Choose a basic Worker starter, name it `hazardous-lies-relay`, then deploy.
-2. Open **Edit code**, replace the starter code with the full contents of `relay/worker.mjs`, and deploy again.
-3. Open the Worker's **Settings → Variables and Secrets → Add**. Add these two values with type **Secret**:
-
-| Name | Value |
-| --- | --- |
-| `TURN_KEY_ID` | Your TURN key ID |
-| `TURN_KEY_API_TOKEN` | The API token associated with that TURN key |
-
-4. Save/deploy the settings. Copy the Worker URL, such as `https://hazardous-lies-relay.your-subdomain.workers.dev`.
-
-The Worker allows browser requests from `https://snehardt.github.io` by default. For another domain, add an `ALLOWED_ORIGIN` variable containing only its origin (no path). Local development requires `http://localhost:5173`. Opening the Worker URL directly may show **Origin not allowed**; test it through the game, which sends an Origin header.
-
-Origin checking controls browser access; it is not user authentication. This endpoint intentionally serves anyone playing the game. Monitor relay usage and use service rate limits if making it widely public.
-
-Official guides: https://developers.cloudflare.com/workers/get-started/dashboard/ and https://developers.cloudflare.com/workers/configuration/secrets/
-
-If your dashboard does not offer a code editor, use the included Wrangler configuration instead. From this project's terminal, run these commands one at a time and follow the browser login prompt:
+From the project directory:
 
 ```sh
-pnpm dlx wrangler login
-pnpm dlx wrangler deploy --config relay/wrangler.toml
-pnpm dlx wrangler secret put TURN_KEY_ID --config relay/wrangler.toml
-pnpm dlx wrangler secret put TURN_KEY_API_TOKEN --config relay/wrangler.toml
+pnpm install
+pnpm relay:login
+pnpm relay:deploy
 ```
 
-The `secret put` commands prompt for each value privately. The deploy output provides your public Worker URL.
+Verify your Cloudflare account email first. During login, review and authorize Wrangler in the browser. Deployment creates `hazardous-lies-relay`, its room namespace, and a free workers.dev address. No paid upgrade is part of the deployment command. If Cloudflare asks for billing or a paid plan, stop.
 
-## 3. Connect the game to the Worker
+Open the HTTPS URL printed by Wrangler. That address serves both the game and its multiplayer relay. The Worker automatically serves `/network-config.js` with the correct public endpoint, and `/health` reports protocol version 4.
 
-Edit `network-config.js`:
+To update the existing GitHub Pages game too, set this public URL in the repository's `network-config.js`:
 
 ```js
-window.HAZARDOUS_TURN_ENDPOINT = 'https://hazardous-lies-relay.your-subdomain.workers.dev';
+window.HAZARDOUS_RELAY_URL = 'https://hazardous-lies-relay.YOUR-SUBDOMAIN.workers.dev';
 ```
 
-Use your actual Worker URL. This URL is public; it is safe to share. Commit and push the game changes to `main`, then wait for GitHub Pages deployment to succeed. Both host and guest should refresh before creating a new room.
+Commit/push the game changes and let GitHub Pages finish its build. Players must refresh to load the updated game. Using the Cloudflare game link works immediately after Worker deployment.
 
-The game fetches temporary credentials on each online connection attempt and configures both WebRTC channels to use the provider's STUN and TURN addresses. Cloudflare includes TURN over TLS on port 443 for networks blocking ordinary UDP connections. Direct connections remain preferred where available. An empty endpoint uses the existing PeerJS defaults; it does not activate the new relay.
+## Local testing
 
-## 4. Verify relay operation
-
-1. Test with the host and a guest on different networks, such as home Wi-Fi and a hotspot.
-2. For a deliberate relay-only test, add this line after the endpoint in `network-config.js`:
-
-```js
-window.HAZARDOUS_PEER_OPTIONS = {config: {iceTransportPolicy: 'relay'}};
+```sh
+pnpm build:site
+pnpm relay:dev
 ```
 
-3. Rebuild/redeploy, refresh both browsers, create a new room, and confirm both players connect and can play. This rules out a successful direct connection concealing a broken relay.
-4. Remove the relay-only override after verifying it, then rebuild/redeploy.
+Open http://localhost:8787 to play using the local Worker and local relay. Alternatively, run `pnpm dev` and temporarily set the static game's endpoint to `http://localhost:8787`. Local HTTP relay URLs are allowed only for localhost/127.0.0.1.
 
-If the game reports **Could not load the multiplayer relay**, inspect the Worker settings/logs. Confirm both secret names and values, deployment status, and allowed origin. If loading succeeds but a friend still cannot join, their network may block WebRTC even through TURN/TLS; try another network and capture the exact game error.
+Run `pnpm test:network` for relay authority and lifecycle tests. With the static development server running and Playwright available, `pnpm test:online` starts a local Cloudflare runtime and tests four browser sessions. Set `TEST_URL` and `TEST_RELAY_URL` to the deployed Worker URL to test production instead.
 
-`pnpm test:network` uses mocked temporary credentials. Set `TEST_RELAY_CONFIG=1` when running `pnpm test:online` to test browser credential loading alongside local WebRTC peers; this mock does not relay traffic. A provisioned account is required to verify actual Cloudflare relay connections.
+For cross-network verification, open the Cloudflare game on home Wi-Fi and a phone hotspot, create a room and move both players. A successful join connects both players through the relay. A school/work network can still block all WebSockets or the workers.dev domain; no service can bypass every network policy.
+
+## Troubleshooting
+
+- **Relay not set up:** the GitHub Pages configuration has no Worker URL. Use the Cloudflare game URL or deploy the updated GitHub Pages files.
+- **Relay unavailable/outdated:** check `/health`, deployment status and daily usage in Cloudflare.
+- **Room not found:** use a fresh invite while the host's tab is open.
+- **Connection lost:** retry; if the host disconnected, create a new room. Keep the host's game tab visible.
+- **Origin not allowed:** add the game's exact origin, without a path, to `ALLOWED_ORIGINS` in `relay/wrangler.toml` and redeploy. The Worker's own origin is already allowed. Browser origin checks are not user authentication; room codes are invitations.
+
+The relay uses WebSocket hibernation and automatic heartbeat responses rather than persistent timers. Room data is held in socket attachments and disappears when everyone disconnects. Credentials remain only in Wrangler's local authentication storage, never in the game or repository.

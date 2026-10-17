@@ -1,166 +1,244 @@
-import { Peer, type DataConnection, type PeerOptions } from 'peerjs';
-import { PROTOCOL, roomCode, validCode, validRoom, inputFromPeer, type Room } from './protocol.js';
-import { loadPeerOptions } from './network.js';
+import {
+  roomCode,
+  validCode,
+  validRoom,
+  PROTOCOL,
+  type Room,
+} from './protocol.js';
 export type { Room } from './protocol.js';
-// Optional private signaling / short-lived TURN configuration. Defaults to PeerJS Cloud.
-declare global { interface Window { HAZARDOUS_PEER_OPTIONS?: PeerOptions; HAZARDOUS_TURN_ENDPOINT?:string } }
-type Reply=(value:{error?:string;ok?:boolean})=>void;
-type Link={control:DataConnection;state?:DataConnection;seen:number;window:number;count:number};
-export async function connectOnline(onRoom:(room:Room)=>void,onInput:(data:any)=>void,onSnapshot:(data:any)=>void,onLost:()=>void,onReady:(ready:boolean)=>void=()=>{}) {
-  const status=document.getElementById('online-status')!;
-  const options=await loadPeerOptions(window.HAZARDOUS_PEER_OPTIONS,window.HAZARDOUS_TURN_ENDPOINT);
-  let peer:Peer,closed=false,current:Room|null=null,hostLink:Link|undefined;
-  let joining:Reply|undefined,joinTimer:ReturnType<typeof setTimeout>|undefined,attempts=0;
-  const guests=new Map<string,Link>(), pendingConnections=new Set<DataConnection>();
-  const timers=new Set<ReturnType<typeof setTimeout>>();
-  const later=(fn:()=>void,ms:number)=>{const t=setTimeout(()=>{timers.delete(t);fn();},ms);timers.add(t);return t;};
-  const send=(connection:DataConnection|undefined,message:unknown)=>{
-    if(!connection?.open)return;
-    try {void Promise.resolve(connection.send(message)).catch(()=>connection.close());}catch {connection.close();}
-  };
-  const publish=()=>{
-    if(!current)return;
-    onRoom(structuredClone(current));
-    for(const link of guests.values())send(link.control,{type:'room',room:current});
-  };
-  const finishJoin=(error?:string)=>{
-    clearTimeout(joinTimer);const reply=joining;joining=undefined;reply?.(error?{error}:{ok:true});
-  };
-  function loseHost(message:string) {
-    const link=hostLink;hostLink=undefined;current=null;
-    link?.state?.close();link?.control.close();finishJoin(message);
-    onLost();status.textContent=message;
+declare global {
+  interface Window {
+    HAZARDOUS_RELAY_URL?: string;
   }
-  function dropGuest(id:string,link:Link) {
-    if(guests.get(id)!==link)return;
-    guests.delete(id);link.state?.close();link.control.close();
-    if(!current || closed)return;
-    const slot=current.players.findIndex(p=>p?.id===id);
-    if(slot>=0)current.players[slot]=null;
-    current.phase='lobby';current.epoch++;publish();
-    status.textContent='A player left. Start a new match when everyone is ready.';
+}
+type Reply = (value: { error?: string; ok?: boolean }) => void;
+
+export async function connectOnline(
+  onRoom: (room: Room) => void,
+  onInput: (data: any) => void,
+  onSnapshot: (data: any) => void,
+  onLost: () => void
+) {
+  const status = document.getElementById('online-status')!;
+  const endpoint = window.HAZARDOUS_RELAY_URL;
+  if (!endpoint)
+    throw new Error(
+      'Online relay is not set up yet. The game owner needs to deploy the free Cloudflare Worker and set its URL in network-config.js.'
+    );
+  let base: URL;
+  try {
+    base = new URL(endpoint);
+    if (
+      base.protocol !== 'https:' &&
+      !(
+        base.protocol === 'http:' &&
+        ['localhost', '127.0.0.1'].includes(base.hostname)
+      )
+    )
+      throw new Error();
+  } catch {
+    throw new Error(
+      'The multiplayer relay URL is invalid. Use the HTTPS Worker URL.'
+    );
   }
-  function watch(connection:DataConnection,onData:(data:any)=>void,onClose:()=>void) {
-    pendingConnections.add(connection);
-    const timeout=later(()=>{pendingConnections.delete(connection);if(!connection.open){onClose();connection.close();}},25000);
-    connection.on('open',()=>{pendingConnections.delete(connection);clearTimeout(timeout);timers.delete(timeout);});
-    connection.on('data',data=>{if(!closed)onData(data);});
-    connection.on('close',()=>{pendingConnections.delete(connection);clearTimeout(timeout);timers.delete(timeout);if(!closed)onClose();});
-    connection.on('error',()=>{connection.close();if(!closed)onClose();});
-  }
-  function accept(connection:DataConnection) {
-    if(connection.label==='state' && current?.host===peer.id && guests.has(connection.peer)) {
-      const link=guests.get(connection.peer)!;
-      if(link.state || connection.metadata?.protocol!==PROTOCOL){connection.close();return;}
-      link.state=connection;watch(connection,()=>{},()=>dropGuest(connection.peer,link));
-      connection.on('open',()=>{const player=current?.players.find(p=>p?.id===connection.peer);if(player){player.ready=true;publish();}});return;
+  const response = await fetch(new URL('/health', base), {
+    signal: AbortSignal.timeout(10000),
+    cache: 'no-store',
+  }).catch(() => {
+    throw new Error(
+      'Cannot reach the multiplayer relay. Check your connection, then Retry Connection.'
+    );
+  });
+  if (!response.ok || (await response.json()).protocol !== 4)
+    throw new Error(
+      'The multiplayer relay is unavailable or outdated. Check the Worker deployment and free daily limits, then Retry Connection.'
+    );
+  let socket: WebSocket | undefined,
+    closed = false,
+    current: Room | null = null,
+    id = '',
+    pending: Reply | undefined;
+  let joinTimer: ReturnType<typeof setTimeout> | undefined,
+    lastSeen = performance.now(),
+    requestId = 0;
+  const requests = new Map<
+    number,
+    { reply: Reply; timer: ReturnType<typeof setTimeout> }
+  >();
+  const finish = (error?: string) => {
+    clearTimeout(joinTimer);
+    const reply = pending;
+    pending = undefined;
+    reply?.(error ? { error } : { ok: true });
+  };
+  const lost = (message: string) => {
+    const active = socket;
+    socket = undefined;
+    current = null;
+    active?.close();
+    finish(message);
+    for (const { reply, timer } of requests.values()) {
+      clearTimeout(timer);
+      reply({ error: message });
     }
-    if(connection.label!=='control' || connection.metadata?.protocol!==PROTOCOL){connection.close();return;}
-    let link:Link|undefined;
-    watch(connection,data=>{
-      if(!link || guests.get(connection.peer)!==link)return;
-      link.seen=performance.now();
-      if(data?.type==='ping'){send(connection,{type:'pong'});return;}
-      if(data?.type!=='input' || current?.phase!=='playing')return;
-      const now=performance.now();if(now-link.window>=1000){link.window=now;link.count=0;}
-      if(++link.count>240)return;
-      const slot=current.players.findIndex(p=>p?.id===connection.peer);
-      const input=inputFromPeer(data.input,slot,current.epoch);if(input)onInput(input);
-    },()=>{if(link)dropGuest(connection.peer,link);});
-    connection.on('open',()=>{
-      if(closed){connection.close();return;}
-      const slot=current?.players.indexOf(null) ?? -1;
-      const error=!current || current.host!==peer.id?'Room not found. Ask the host to create a room.':guests.has(connection.peer)?'Already joined this room.':current.phase!=='lobby'?'This match has started. Wait for the lobby.':slot<0?'This room is full (4 players).':undefined;
-      if(error){send(connection,{type:'error',message:error});later(()=>connection.close(),1000);return;}
-      link={control:connection,seen:performance.now(),window:0,count:0};guests.set(connection.peer,link);
-      current!.players[slot]={id:connection.peer,slot,ready:false};publish();
-    });
-  }
-  function initialize() {
-    peer=new Peer(PROTOCOL+roomCode(),options);
-    const active=peer;
-    const startup=later(()=>{if(!closed && peer===active && !peer.open){status.textContent='Cannot reach the connection service. Check your internet or VPN, then click Retry Connection.';onReady(false);}},20000);
-    peer.on('open',()=>{if(closed || peer!==active)return;clearTimeout(startup);timers.delete(startup);status.textContent='Connected. Create a room or join a six-character code.';onReady(true);});
-    peer.on('connection',connection=>{if(closed || peer!==active)connection.close();else accept(connection);});
-    peer.on('disconnected',()=>{
-      if(closed || peer!==active)return;
-      onReady(false);
-      status.textContent='Signaling disconnected. Existing WebRTC connections can keep playing; reconnecting…';
-      later(()=>{if(!closed && peer===active && peer.disconnected && !peer.destroyed)peer.reconnect();},3000);
-    });
-    peer.on('error',error=>{
-      if(closed || peer!==active)return;
-      clearTimeout(startup);timers.delete(startup);
-      if(error.type==='unavailable-id' && !current && ++attempts<4){peer.destroy();initialize();return;}
-      if(error.type==='peer-unavailable' && joining){loseHost('Room not found. Check the six-character code and that the host is online.');return;}
-      if(joining){loseHost(`Could not reach the host (${error.type}). Keep the host tab open, then retry. If this repeats, try another network or turn off your VPN.`);return;}
-      if(!peer.open)onReady(false);
-      status.textContent=`Connection service error (${error.type}). Check your internet or VPN, then click Retry Connection.`;
-    });
-  }
-  initialize();
-  const heartbeat=setInterval(()=>{
-    if(closed)return;
-    const now=performance.now();
-    if(hostLink && current){if(now-hostLink.seen>15000)loseHost('Host connection lost. Create or join a new room.');else send(hostLink.control,{type:'ping'});}
-    for(const [id,link] of guests){if(now-link.seen>15000)dropGuest(id,link);else send(link.control,{type:'ping'});}
-  },2000);
+    requests.clear();
+    if (!closed) {
+      onLost();
+      status.textContent = message;
+    }
+  };
+  const send = (value: unknown) => {
+    if (socket?.readyState === WebSocket.OPEN)
+      socket.send(JSON.stringify(value));
+  };
+  status.textContent =
+    'Relay available. Create a room or join a six-character code.';
+  const heartbeat = setInterval(() => {
+    if (!socket || socket.readyState !== WebSocket.OPEN) return;
+    if (performance.now() - lastSeen > 15000) {
+      lost('Relay connection lost. Retry or create a new room.');
+      return;
+    }
+    socket.send('ping');
+  }, 5000);
   return {
-    get id(){return peer.id;},
-    get connected(){return !closed && (peer.open || !!current);},
-    get signalingReady(){return !closed && peer.open;},
-    sendInput(input:unknown){send(hostLink?.control,{type:'input',input});},
-    sendSnapshot(state:any){
-      if(!current || current.host!==peer.id || current.phase!=='playing' || state.epoch!==current.epoch)return;
-      const snapshot=structuredClone(state);
-      for(const link of guests.values()) {
-        // Separate unordered snapshots from reliable control/input. Drop stale state
-        // before enqueueing if the WebRTC send buffer is congested.
-        const c=link.state;
-        if(c?.open && c.dataChannel.bufferedAmount<32768)send(c,{type:'snapshot',state:snapshot});
+    get id() {
+      return id;
+    },
+    get connected() {
+      return !closed;
+    },
+    sendInput(input: unknown) {
+      send({ type: 'input', input });
+    },
+    sendSnapshot(state: any) {
+      if (
+        current?.host === id &&
+        current?.phase === 'playing' &&
+        state.epoch === current.epoch &&
+        socket?.readyState === WebSocket.OPEN &&
+        socket.bufferedAmount < 32768
+      )
+        send({ type: 'snapshot', state });
+    },
+    request(event: string, data: unknown, reply: Reply) {
+      if (closed) {
+        reply({ error: 'Retry Connection first.' });
+        return;
       }
-    },
-    request(event:string,data:unknown,reply:Reply) {
-      if(closed || !peer.open){reply({error:'Still connecting to PeerJS signaling. Please wait or retry.'});return;}
-      if(event==='create-room') {
-        if(current || joining){reply({error:'Leave your current room first.'});return;}
-        current={code:peer.id.slice(PROTOCOL.length),host:peer.id,phase:'lobby',epoch:0,players:[{id:peer.id,slot:0},null,null,null]};publish();reply({ok:true});
-      } else if(event==='start-game') {
-        if(!current || current.host!==peer.id){reply({error:'Only the host can start.'});return;}
-        if(current.phase!=='lobby' || current.players.filter(Boolean).length<2){reply({error:'Wait for at least two players.'});return;}
-        if([...guests.values()].some(link=>!link.state?.open)){reply({error:'Waiting for all WebRTC game channels to connect. Try Start again shortly.'});return;}
-        current.phase='playing';current.epoch++;publish();reply({ok:true});
-      } else if(event==='join-room') {
-        const code=typeof data==='string'?data.trim().toUpperCase():'';
-        if(!validCode(code)){reply({error:'Room not found. Enter the host’s six-character code.'});return;}
-        if(current || joining){reply({error:'Leave your current room first.'});return;}
-        if(PROTOCOL+code===peer.id){reply({error:'Create a room to host on this device.'});return;}
-        joining=reply;
-        const control=peer.connect(PROTOCOL+code,{label:'control',reliable:true,serialization:'json',metadata:{protocol:PROTOCOL}});
-        const link:Link={control,seen:performance.now(),window:0,count:0};hostLink=link;
-        watch(control,message=>{
-          if(hostLink!==link)return;
-          link.seen=performance.now();
-          if(message?.type==='ping'){send(control,{type:'pong'});return;}
-          if(message?.type==='error'){loseHost(String(message.message));return;}
-          if(message?.type!=='room' || !validRoom(message.room,control.peer,peer.id))return;
-          if(current && message.room.epoch<current.epoch)return;
-          current=message.room;onRoom(structuredClone(current!));finishJoin();
-          if(!link.state) {
-            const state=peer.connect(control.peer,{label:'state',reliable:false,serialization:'binary',metadata:{protocol:PROTOCOL}});link.state=state;
-            watch(state,data=>{
-              if(hostLink!==link)return;
-              if(data?.type==='snapshot' && current?.phase==='playing' && data.state?.epoch===current.epoch){link.seen=performance.now();onSnapshot(data.state);}
-            },()=>{if(hostLink===link)loseHost('The game connection failed or closed. The host may still be online. Try a fresh invite or another network.');});
+      if (event === 'start-game') {
+        if (!current || current.host !== id) {
+          reply({ error: 'Only the host can start.' });
+          return;
+        }
+        const request = ++requestId;
+        requests.set(request, {
+          reply,
+          timer: setTimeout(() => {
+            requests.delete(request);
+            reply({ error: 'Start request timed out. Retry.' });
+          }, 10000),
+        });
+        send({ type: 'start', request });
+        return;
+      }
+      if (!['create-room', 'join-room'].includes(event)) {
+        reply({ error: 'Unknown room request.' });
+        return;
+      }
+      if (current || pending) {
+        reply({ error: 'Leave your current room first.' });
+        return;
+      }
+      const code =
+        event === 'create-room'
+          ? roomCode()
+          : typeof data === 'string'
+            ? data.trim().toUpperCase()
+            : '';
+      if (!validCode(code)) {
+        reply({
+          error: 'Room not found. Enter the host’s six-character code.',
+        });
+        return;
+      }
+      pending = reply;
+      id = '';
+      const url = new URL(`/rooms/${code}`, base);
+      url.protocol = base.protocol === 'https:' ? 'wss:' : 'ws:';
+      url.searchParams.set('mode', event === 'create-room' ? 'create' : 'join');
+      const active = new WebSocket(url);
+      socket = active;
+      const fail = () => {
+        if (socket === active)
+          lost(
+            'Could not connect to the room relay. Check the room code, host tab, and free daily limits, then retry.'
+          );
+      };
+      active.onmessage = (event) => {
+        if (socket !== active || closed) return;
+        lastSeen = performance.now();
+        if (event.data === 'pong') return;
+        let message: any;
+        try {
+          message = JSON.parse(event.data);
+        } catch {
+          return;
+        }
+        if (message.type === 'welcome' && typeof message.id === 'string') {
+          id = message.id;
+          return;
+        }
+        if (message.type === 'error' || message.type === 'lost') {
+          lost(String(message.message));
+          return;
+        }
+        if (
+          message.type === 'room' &&
+          validRoom(message.room, PROTOCOL + code, id)
+        ) {
+          if (current && message.room.epoch < current.epoch) return;
+          current = message.room;
+          onRoom(structuredClone(current!));
+          finish();
+          return;
+        }
+        if (message.type === 'reply') {
+          const request = requests.get(message.request);
+          if (request) {
+            clearTimeout(request.timer);
+            requests.delete(message.request);
+            request.reply(
+              message.error ? { error: String(message.error) } : { ok: true }
+            );
           }
-        },()=>{if(hostLink===link)loseHost(joining?'Could not complete the connection. Keep the host tab open and retry. If it keeps failing, try home Wi-Fi or a phone hotspot.':'Connection to the host failed or closed. The host may still be online. Try a fresh invite or another network.');});
-        joinTimer=later(()=>{if(hostLink===link && joining)loseHost('Connection timed out. Keep the host tab open and retry. Try home Wi-Fi or a phone hotspot if your network blocks multiplayer.');},25000);
-      } else reply({error:'Unknown room request.'});
+          return;
+        }
+        if (message.type === 'input' && current?.host === id)
+          onInput(message.input);
+        if (
+          message.type === 'snapshot' &&
+          current?.host !== id &&
+          current?.phase === 'playing' &&
+          message.state?.epoch === current.epoch
+        )
+          onSnapshot(message.state);
+      };
+      active.onopen = () => {
+        lastSeen = performance.now();
+      };
+      active.onerror = fail;
+      active.onclose = fail;
+      joinTimer = setTimeout(() => {
+        if (socket === active && pending)
+          lost('Room connection timed out. Keep the host tab open and retry.');
+      }, 25000);
     },
-    disconnect(){
-      if(closed)return;closed=true;clearInterval(heartbeat);clearTimeout(joinTimer);timers.forEach(clearTimeout);timers.clear();
-      hostLink?.state?.close();hostLink?.control.close();for(const link of guests.values()){link.state?.close();link.control.close();}
-      pendingConnections.forEach(c=>c.close());pendingConnections.clear();guests.clear();current=null;peer.destroy();
+    disconnect() {
+      if (closed) return;
+      closed = true;
+      clearInterval(heartbeat);
+      lost('Left online play.');
     },
   };
 }

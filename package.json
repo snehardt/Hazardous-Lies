@@ -5,6 +5,10 @@
   "type": "module",
   "scripts": {
     "dev": "node server.mjs",
+    "relay:dev": "wrangler dev --config relay/wrangler.toml --port 8787",
+    "relay:login": "wrangler login",
+    "relay:deploy": "pnpm build:site && wrangler deploy --config relay/wrangler.toml",
+    "build:site": "pnpm build && node scripts/prepare-site.mjs",
     "build": "tsc && esbuild src/main.ts --bundle --format=esm --target=es2022 --outfile=dist/main.js",
     "check": "tsc --noEmit",
     "test": "node tests/smoke.mjs",
@@ -16,10 +20,7 @@
   },
   "devDependencies": {
     "esbuild": "^0.28.2",
-    "peer": "^1.0.2",
-    "typescript": "^5.9.3"
-  },
-  "dependencies": {
-    "peerjs": "^1.5.5"
+    "typescript": "^5.9.3",
+    "wrangler": "^4.150.0"
   }
 }
